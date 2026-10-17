@@ -48,26 +48,14 @@ All stages use their assigned campaign maps and the documented scripted schedule
 
 In the lobby, choose or unlock an Endless map from the right panel, optionally turn on Mystery Towers and/or Random Modifiers, then click **Start Endless**. Endless begins with the same scripted Waves 1–15 and procedurally builds Wave 16 onward. The HUD shows **Wave N**. Mystery offers reveal their rarity and price before purchase; cancelling a paid placement refunds its full cost, and placed mystery towers cannot be sold. Random Modifiers offer three choices on their scheduled waves; their active effects are available by clicking the modifier status in the right panel. **Endless runs with Random Modifiers enabled grant no progression rewards (Player XP, gems, or tower mastery); in-run coins still work normally.** Without modifiers, Endless progression rewards are granted when the run ends in defeat.
 
-## Publish with GitHub Pages
+## Publish with Cloudflare Pages
 
-The project is configured for GitHub Pages using `.github/workflows/pages.yml`. It builds the game and deploys the `dist` output whenever a commit is pushed to `main`. Vite's relative asset base (`./`) supports the repository's project-page URL, so the repository can keep its source code and does not need a generated `gh-pages` branch.
+This project can be deployed for free with Cloudflare Pages while keeping the GitHub repository private. Connect `thunderpunch52-ops/Goofy-Tower-Defense` in Cloudflare Pages and use these build settings:
 
-Recommended GitHub repository: **`goofy-tower-defense`**, visibility **Public**, default branch **`main`**. A public repository supports Pages on GitHub Free; the published site itself is publicly accessible. GitHub Pages can also use a private repository on eligible paid plans, but the Pages website is still public.
+- Production branch: `main`
+- Framework preset: `None`
+- Build command: `pnpm build`
+- Build output directory: `dist`
+- Environment variables: `NODE_VERSION=22` and `PNPM_VERSION=9.15.9`
 
-To publish when you are ready:
-
-1. Create a new GitHub repository named `goofy-tower-defense`. Choose **Public**, set the default branch to **`main`**, and do not initialize it with a README, `.gitignore`, or license (those files already exist here).
-2. In the repository, open **Settings → Pages** and set **Build and deployment → Source** to **GitHub Actions**.
-3. From PowerShell in this project folder, run the following commands. Replace `<your-username>` with your GitHub username. The `git push` is the step that starts the first deployment.
-
-   ```powershell
-   git branch -M main
-   git add .
-   git commit -m "Prepare game for GitHub Pages"
-   git remote add origin https://github.com/<your-username>/goofy-tower-defense.git
-   git push -u origin main
-   ```
-
-4. On GitHub, open **Actions** and wait for **Deploy to GitHub Pages** to finish. The site URL will be `https://<your-username>.github.io/goofy-tower-defense/`.
-
-After that first deployment, pushing updates to `main` automatically rebuilds and republishes the site. Continue editing the source files in this project folder; do not edit generated files under `dist`. The workflow can also be run manually from **Actions → Deploy to GitHub Pages → Run workflow**.
+Cloudflare automatically builds and publishes each new commit pushed to `main`. If pnpm setup reports `ERROR packages field missing or empty`, confirm that this single-package project does not contain a `pnpm-workspace.yaml` file. Continue editing the source files in this project folder; do not edit generated files under `dist`.
