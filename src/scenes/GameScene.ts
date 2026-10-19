@@ -138,6 +138,7 @@ export class GameScene extends Phaser.Scene {
   private firstClear = false;
   private campaignGemReward = 0;
   private mutationStacks: Record<string, number> = {};
+  private mutationChoiceHistory: string[] = [];
   private stackableMutationCount = 0;
   private nonstackableMutationCount = 0;
   private stackableSinceForced = 0;
@@ -146,6 +147,8 @@ export class GameScene extends Phaser.Scene {
   private towerStunUntil = 0;
   private modifierChoiceOpen = false;
   private modifierOverlayObjects: Phaser.GameObjects.GameObject[] = [];
+  private mutationTabButton?: Phaser.GameObjects.Rectangle;
+  private mutationTabLabel?: Phaser.GameObjects.Text;
   private mysteryBoxUsed = false;
   private mysteryPlacing = false;
   private mysteryBoxButton?: Phaser.GameObjects.Rectangle;
@@ -244,6 +247,7 @@ export class GameScene extends Phaser.Scene {
     this.pendingImpacts.length = 0;
     this.routeArrows.length = 0;
     this.mutationStacks = {};
+    this.mutationChoiceHistory = [];
     this.stackableMutationCount = 0;
     this.nonstackableMutationCount = 0;
     this.stackableSinceForced = 0;
@@ -337,6 +341,8 @@ export class GameScene extends Phaser.Scene {
     this.skipButton = undefined;
     this.skipButtonLabel = undefined;
     this.modifierStatusLabel = undefined;
+    this.mutationTabButton = undefined;
+    this.mutationTabLabel = undefined;
     this.phase = 'countdown';
     this.nextEnemyId = 1;
     this.gridFeedback = '';
@@ -873,6 +879,16 @@ export class GameScene extends Phaser.Scene {
     this.add.text(leftX, 272, 'COINS', { fontFamily: 'Arial', fontSize: '12px', color: COLORS.muted, fontStyle: 'bold', letterSpacing: 2 });
     this.coinLabel = this.add.text(leftX, 294, '$450', { fontFamily: 'Arial', fontSize: '24px', color: '#f4c86a', fontStyle: 'bold' });
 
+    const mutationRun = !this.mapPreview && ((this.endlessMode && this.endlessModifiersEnabled) || (!this.endlessMode && this.campaignStage === 5));
+    if (mutationRun) {
+      this.mutationTabButton = this.add.rectangle(18, 430, 32, 132, 0x3c3262).setStrokeStyle(1.5, 0xb98cf5)
+        .setDepth(12).setInteractive({ useHandCursor: true });
+      this.mutationTabLabel = this.add.text(18, 430, 'MUTATIONS', { fontFamily: 'Arial', fontSize: '11px', color: '#f6f1df', fontStyle: 'bold', letterSpacing: 1 })
+        .setOrigin(0.5).setRotation(-Math.PI / 2).setDepth(13).setInteractive({ useHandCursor: true });
+      this.mutationTabButton.on('pointerdown', () => this.showActiveModifiers());
+      this.mutationTabLabel.on('pointerdown', () => this.showActiveModifiers());
+    }
+
     this.add.text(leftX, 355, 'TOWER DETAILS', { fontFamily: 'Arial', fontSize: '14px', color: COLORS.muted, fontStyle: 'bold', letterSpacing: 2 });
     this.selectionLabel = this.add.text(leftX, 381, 'No tower selected', { fontFamily: 'Arial', fontSize: '18px', color: COLORS.cream, fontStyle: 'bold', wordWrap: { width: 280 } });
     this.towerStatsLabel = this.add.text(leftX, 408, 'Choose a tower to see its stats.', { fontFamily: 'Arial', fontSize: '12px', color: COLORS.muted, lineSpacing: 2, wordWrap: { width: 280 } });
@@ -1026,10 +1042,11 @@ export class GameScene extends Phaser.Scene {
   }
 
   private selectMysteryTower(): void {
-    const stageFourFree = !this.endlessMode && this.campaignStage === 4 && !this.mysteryBoxUsed;
-    if (!stageFourFree && !this.endlessMysteryEnabled) return;
+    const mysteryOnlyRun = this.isMysteryOnlyRun();
+    const freeFirstMysteryBox = mysteryOnlyRun && !this.mysteryBoxUsed;
+    if (!mysteryOnlyRun) return;
     if (!this.mysteryTowerOffer) {
-      if (stageFourFree) {
+      if (freeFirstMysteryBox && !this.endlessMode) {
         const eligible = TOWERS.filter((tower) => (tower.rarity === 'Common' || tower.rarity === 'Rare') && tower.attackType !== 'supportLaser');
         this.mysteryTowerOffer = eligible[Math.floor(Math.random() * eligible.length)]!;
         this.mysteryTowerCost = 0;
@@ -1038,9 +1055,9 @@ export class GameScene extends Phaser.Scene {
         const rarity = roll() <= 5 ? 'Legendary' : roll() <= 16 ? 'Epic' : roll() <= 31 ? 'Rare' : 'Common';
         const pool = TOWERS.filter((tower) => tower.rarity === rarity);
         this.mysteryTowerOffer = pool[Math.floor(Math.random() * pool.length)]!;
-        this.mysteryTowerCost = rarity === 'Common' ? 400 : rarity === 'Rare' ? 900 : rarity === 'Epic' ? 2000 : 3100;
+        this.mysteryTowerCost = freeFirstMysteryBox ? 0 : rarity === 'Common' ? 400 : rarity === 'Rare' ? 900 : rarity === 'Epic' ? 2000 : 3100;
       }
-      if (!stageFourFree) {
+      if (!freeFirstMysteryBox) {
         const rarity = this.mysteryTowerOffer.rarity.toUpperCase();
         this.mysteryBoxTitle?.setText(`${rarity} MYSTERY`);
         this.mysteryBoxMeta?.setText(`REVEALED · $${this.mysteryTowerCost} · CLICK TO BUY`);
@@ -1076,20 +1093,28 @@ export class GameScene extends Phaser.Scene {
     return { unlocked: false, requirement: campaign[spec.id] ?? 'Progression unlock' };
   }
 
+  private isMysteryOnlyRun(): boolean {
+    return !this.mapPreview && (
+      (this.endlessMode && this.endlessMysteryEnabled)
+      || (!this.endlessMode && this.campaignStage === 4)
+    );
+  }
+
   private setTowerGridOpen(open: boolean): void {
     this.towerGridOverlay?.setVisible(open);
     this.towerGridTitle?.setVisible(open);
     this.towerGridClose?.setVisible(open);
     this.towerGridCloseLabel?.setVisible(open);
     this.towerGridHint?.setVisible(open);
-    const showMystery = open && !this.mapPreview && ((this.campaignStage === 4 && !this.endlessMode && !this.mysteryBoxUsed) || (this.endlessMode && this.endlessMysteryEnabled));
+    const showMystery = open && this.isMysteryOnlyRun();
     this.mysteryBoxButton?.setVisible(showMystery);
     this.mysteryBoxTitle?.setVisible(showMystery);
     this.mysteryBoxMeta?.setVisible(showMystery);
     this.mysteryBoxTitle?.setText(this.mysteryTowerOffer ? `${this.mysteryTowerOffer.rarity.toUpperCase()} MYSTERY` : 'MYSTERY TOWER');
-    this.mysteryBoxMeta?.setText(this.mysteryTowerOffer ? `${this.mysteryTowerCost ? `$${this.mysteryTowerCost} · ` : 'FREE · '}CLICK TO ${this.mysteryTowerCost ? 'BUY' : 'PLACE'}` : this.endlessMode ? 'REVEALS RARITY · CLICK' : 'FREE · LOW/MID ATTACK TOWER');
+    const stageFourFreeAvailable = !this.endlessMode && this.campaignStage === 4 && !this.mysteryBoxUsed;
+    this.mysteryBoxMeta?.setText(this.mysteryTowerOffer ? `${this.mysteryTowerCost ? `$${this.mysteryTowerCost} · ` : 'FREE · '}CLICK TO ${this.mysteryTowerCost ? 'BUY' : 'PLACE'}` : stageFourFreeAvailable ? 'FREE · LOW/MID ATTACK TOWER' : 'REVEALS RARITY · CLICK');
     this.mysteryBoxButton?.setInteractive({ useHandCursor: true }).setAlpha(1);
-    const mysteryOnly = this.endlessMode && this.endlessMysteryEnabled;
+    const mysteryOnly = this.isMysteryOnlyRun();
     for (const [index, card] of this.towerGridCards.entries()) {
       const spec = TOWERS[index]!;
       const locked = !this.towerUnlockState(spec).unlocked;
@@ -1988,6 +2013,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private applyMutation(choice: CampaignMutation): void {
+    this.mutationChoiceHistory.push(choice.id);
     if (choice.id === 'mutationRoulette') {
       const active = CAMPAIGN_MUTATIONS.filter((item) => item.id !== choice.id && this.mutationStack(item.id) > 0);
       if (active.length) {
@@ -2033,23 +2059,29 @@ export class GameScene extends Phaser.Scene {
     this.modifierChoiceOpen = true;
     const backdrop = this.add.rectangle(W / 2, H / 2, W, H, 0x071016, 0.84).setDepth(40).setInteractive();
     const panel = this.add.rectangle(W / 2, H / 2, 700, 430, 0x203643).setStrokeStyle(2, 0x6fc8e8).setDepth(41);
-    const title = this.add.text(W / 2, 178, 'ACTIVE RUN MODIFIERS', { fontFamily: 'Arial', fontSize: '23px', color: '#f6f1df', fontStyle: 'bold', letterSpacing: 2 }).setOrigin(0.5).setDepth(42);
-    const active = CAMPAIGN_MUTATIONS.filter((entry) => this.mutationStack(entry.id) > 0);
+    const title = this.add.text(W / 2, 178, 'MUTATIONS CHOSEN THIS RUN', { fontFamily: 'Arial', fontSize: '23px', color: '#f6f1df', fontStyle: 'bold', letterSpacing: 2 }).setOrigin(0.5).setDepth(42);
+    const chosenIds = [...new Set(this.mutationChoiceHistory)];
+    const chosen = chosenIds.map((id) => CAMPAIGN_MUTATIONS.find((entry) => entry.id === id)!).filter(Boolean);
     let page = 0;
     const list = this.add.text(W / 2, 218, '', { fontFamily: 'Arial', fontSize: '12px', color: '#e1e8ec', align: 'left', wordWrap: { width: 590 }, lineSpacing: 2 }).setOrigin(0.5, 0).setDepth(42);
     const pageLabel = this.add.text(W / 2, 534, '', { fontFamily: 'Arial', fontSize: '11px', color: '#a8b8b8', align: 'center' }).setOrigin(0.5).setDepth(42);
     const pageButton = (x: number, label: string, step: number) => {
       const button = this.add.rectangle(x, 534, 72, 28, 0x263447).setStrokeStyle(1, 0x6fc8e8).setDepth(42).setInteractive({ useHandCursor: true });
       const buttonLabel = this.add.text(x, 534, label, { fontFamily: 'Arial', fontSize: '11px', color: '#ffffff', fontStyle: 'bold' }).setOrigin(0.5).setDepth(43);
-      const changePage = () => { page = Math.max(0, Math.min(Math.ceil(active.length / 7) - 1, page + step)); refreshPage(); };
+      const changePage = () => { page = Math.max(0, Math.min(Math.ceil(chosen.length / 7) - 1, page + step)); refreshPage(); };
       button.on('pointerdown', changePage);
       buttonLabel.setInteractive({ useHandCursor: true }).on('pointerdown', changePage);
       this.modifierOverlayObjects.push(button, buttonLabel);
     };
     const refreshPage = () => {
-      const visible = active.slice(page * 7, page * 7 + 7);
-      list.setText(visible.length ? visible.map((entry) => `${entry.name}${entry.stackable === false ? '' : ` ×${this.mutationStack(entry.id)}`}\n${entry.description}`).join('\n\n') : 'No modifiers are active yet.');
-      pageLabel.setText(active.length ? `PAGE ${page + 1} / ${Math.ceil(active.length / 7)}` : '');
+      const visible = chosen.slice(page * 7, page * 7 + 7);
+      list.setText(visible.length ? visible.map((entry) => {
+        const chosenCount = this.mutationChoiceHistory.filter((id) => id === entry.id).length;
+        const activeCount = this.mutationStack(entry.id);
+        const status = activeCount === chosenCount ? `CHOSEN ×${chosenCount} · ACTIVE` : `CHOSEN ×${chosenCount} · ACTIVE ×${activeCount}`;
+        return `${entry.name}  ·  ${status}\n${entry.description}`;
+      }).join('\n\n') : 'No mutations have been chosen yet.');
+      pageLabel.setText(chosen.length ? `PAGE ${page + 1} / ${Math.ceil(chosen.length / 7)}` : '');
     };
     refreshPage();
     pageButton(465, '‹ PREV', -1);
@@ -2518,7 +2550,7 @@ export class GameScene extends Phaser.Scene {
     if (this.coins < cost) { this.gridFeedback = `NOT ENOUGH COINS · $${cost} NEEDED`; this.updateHUD(); return; }
     if (!this.isBuildable(tile, spec)) { this.gridFeedback = `INVALID ${spec.footprint}×${spec.footprint} FOOTPRINT · CHOOSE CLEAR TILES`; this.updateHUD(); return; }
     this.coins -= cost;
-    if (mystery && !this.endlessMode) this.mysteryBoxUsed = true;
+    if (mystery) this.mysteryBoxUsed = true;
     this.mysteryPlacing = false;
     const center = this.towerCenter(tile, spec);
     const size = BOARD.cell * spec.footprint * 0.9;
@@ -2944,7 +2976,10 @@ export class GameScene extends Phaser.Scene {
       this.towerStatsLabel?.setText(details.join('\n')).setColor('#d8e5e1');
     }
     const currentUnlock = this.towerUnlockState(this.currentTowerSpec);
-    this.rosterNameLabel?.setText('OPEN GRID');
+    // Mystery Boxes replace the normal tower roster for the full Endless
+    // Mystery run and throughout Stage 4.
+    const mysteryBoxReplacesRoster = this.isMysteryOnlyRun();
+    this.rosterNameLabel?.setText(mysteryBoxReplacesRoster ? 'MYSTERY BOX' : 'OPEN GRID');
     const canAfford = currentUnlock.unlocked && this.coins >= this.currentTowerSpec.cost;
     this.towerButton?.setStrokeStyle(1, canAfford ? RARITY_COLOR[this.currentTowerSpec.rarity] : 0xef7e9c).setFillStyle(canAfford ? 0x202c46 : 0x302436);
     this.upgradeButtons.forEach((button, pathIndex) => {
