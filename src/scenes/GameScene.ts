@@ -15,6 +15,8 @@ const BOARD = { x: 422.4, y: 88, cell: 10 };
 const PRIORITIES = ['First', 'Last', 'Weakest', 'Strongest'] as const;
 type Priority = typeof PRIORITIES[number];
 const RARITY_COLOR: Record<TowerSpec['rarity'], number> = { Common: 0x8fd3ae, Rare: 0x6fc8e8, Epic: 0xb98cf5, Legendary: 0xf4c86a };
+const RARITY_ORDER = ['Common', 'Rare', 'Epic', 'Legendary'] as const;
+const ROSTER_TOWERS = [...TOWERS].sort((a, b) => RARITY_ORDER.indexOf(a.rarity) - RARITY_ORDER.indexOf(b.rarity));
 const PHYSICAL_PROJECTILE_TOWER_IDS = new Set(['lawnDartGnome', 'leafBlowerGuy', 'waterBalloonSlingshot', 'stickyBubblegumDispenser', 'angryPigeon', 'squeakyRubberDuckCannon', 'unstableToasterLauncher']);
 
 interface PlacedTower {
@@ -1020,11 +1022,11 @@ export class GameScene extends Phaser.Scene {
     this.towerGridCloseLabel = this.add.text(856, 106, '×', { fontFamily: 'Arial', fontSize: '20px', color: '#f6f1df', fontStyle: 'bold' }).setOrigin(0.5).setDepth(33).setVisible(false);
     this.towerGridClose.on('pointerdown', () => this.setTowerGridOpen(false));
     this.towerGridCloseLabel.setInteractive({ useHandCursor: true }).on('pointerdown', () => this.setTowerGridOpen(false));
-    this.towerGridHint = this.add.text(640, 530, 'Choose an unlocked tower · locked towers show their unlock requirement', {
+    this.towerGridHint = this.add.text(640, 651, 'Choose an unlocked tower · locked towers show their unlock requirement', {
       fontFamily: 'Arial', fontSize: '10px', color: '#b8c6ff', align: 'center', wordWrap: { width: 430 },
     }).setOrigin(0.5).setDepth(34).setVisible(false);
 
-    TOWERS.forEach((spec, index) => {
+    ROSTER_TOWERS.forEach((spec, index) => {
       const col = index % 3;
       const row = Math.floor(index / 3);
       const x = 487 + col * 151;
@@ -1048,7 +1050,7 @@ export class GameScene extends Phaser.Scene {
           return;
         }
         this.mysteryPlacing = false;
-        this.rosterIndex = index;
+        this.rosterIndex = TOWERS.findIndex((tower) => tower.id === spec.id);
         this.setTowerGridOpen(false);
         this.startPlacingTower();
       });
@@ -1142,7 +1144,7 @@ export class GameScene extends Phaser.Scene {
     this.mysteryBoxButton?.setInteractive({ useHandCursor: true }).setAlpha(1);
     const mysteryOnly = this.isMysteryOnlyRun();
     for (const [index, card] of this.towerGridCards.entries()) {
-      const spec = TOWERS[index]!;
+      const spec = ROSTER_TOWERS[index]!;
       const locked = !this.towerUnlockState(spec).unlocked;
       card.button.setVisible(open && !mysteryOnly);
       card.icon.setVisible(open && !mysteryOnly);
@@ -3696,6 +3698,53 @@ export class GameScene extends Phaser.Scene {
       case 'cosmicRoomba':
         g.fillStyle(0x45566e, 1).fillCircle(0, 0, 9*u); g.lineStyle(1.5*u, 0x17152f, 1).strokeCircle(0, 0, 7.5*u);
         dot(0, -2, 3, 0x8f78e8); bar(-5, 4, 5, 4, cyan, 1); dot(-6, 0, 1, gold); dot(6, 1, 1, pink); break;
+      case 'cardboardFortress':
+        g.fillStyle(0x9b673e, 1).fillRoundedRect(-9*u, -8*u, 18*u, 16*u, 1.5*u);
+        g.fillStyle(0xc99155, 1).fillRect(-7*u, -5*u, 14*u, 11*u);
+        g.fillStyle(0xb77b49, 1).fillRect(-10*u, -10*u, 5*u, 5*u).fillRect(-2.5*u, -10*u, 5*u, 5*u).fillRect(5*u, -10*u, 5*u, 5*u);
+        g.lineStyle(1.1*u, 0x70472f, 1).lineBetween(-5*u, -5*u, -5*u, 5*u).lineBetween(0, -5*u, 0, 5*u).lineBetween(5*u, -5*u, 5*u, 5*u);
+        g.fillStyle(0x4e382c, 1).fillRoundedRect(-2*u, 1*u, 4*u, 7*u, 1*u);
+        bar(-8, -7, 8, -7, cream, 1); break;
+      case 'sodaMachineMech':
+        g.fillStyle(0x54717c, 1).fillRoundedRect(-7*u, -7*u, 14*u, 14*u, 2*u);
+        g.fillStyle(0x9ce7dc, 1).fillRoundedRect(-4*u, -5*u, 8*u, 6*u, 1*u);
+        g.fillStyle(0x26384a, 1).fillRect(-3*u, -4*u, 6*u, 4*u);
+        dot(-1, -2, 1.1, pink); dot(1, -2, 1.1, cyan);
+        g.fillStyle(0xe94e62, 1).fillRoundedRect(-10*u, -3*u, 3*u, 8*u, 1*u);
+        g.fillStyle(0x53bed2, 1).fillRoundedRect(7*u, -3*u, 3*u, 8*u, 1*u);
+        bar(-5, 8, -3, 10, ink, 2); bar(5, 8, 3, 10, ink, 2); bar(-7, 0, -9, 2, gold, 1); bar(7, 0, 9, 2, gold, 1); break;
+      case 'laserOfficePrinter':
+        g.fillStyle(0x465360, 1).fillRoundedRect(-9*u, -5*u, 18*u, 11*u, 2*u);
+        g.fillStyle(0x202c38, 1).fillRoundedRect(-6*u, -8*u, 12*u, 6*u, 1*u);
+        g.fillStyle(0xe9edf0, 1).fillRect(-5*u, -10*u, 10*u, 4*u);
+        g.fillStyle(0x90a6b4, 1).fillRect(-6*u, 2*u, 12*u, 3*u);
+        dot(6, -3, 1.2, 0x75efc1); bar(-4, 7, 5, 7, cream, 1); bar(-9, 0, -5, 0, pink, 2); break;
+      case 'arcadeClawMachine':
+        g.fillStyle(0x57437c, 1).fillRoundedRect(-9*u, -10*u, 18*u, 20*u, 2*u);
+        g.fillStyle(0x7dd8e7, 0.95).fillRoundedRect(-6*u, -7*u, 12*u, 10*u, 1*u);
+        g.lineStyle(1.2*u, 0xf5e8ff, 0.95).lineBetween(0, -7*u, 0, -3*u).lineBetween(-2*u, -3*u, 2*u, -3*u).lineBetween(-2*u, -3*u, -3*u, -1*u).lineBetween(2*u, -3*u, 3*u, -1*u);
+        dot(-3, 1, 1.8, pink); dot(1, 1, 1.8, gold); dot(4, 1, 1.5, cyan);
+        g.fillStyle(0x342c48, 1).fillRoundedRect(-8*u, 5*u, 16*u, 3*u, 1*u);
+        dot(-3, 6.5, 1, cream); dot(3, 6.5, 1, cream); bar(0, -10, 0, -8, gold, 2); break;
+      case 'sentientMicrowaveOven':
+        g.fillStyle(0x606c78, 1).fillRoundedRect(-10*u, -8*u, 20*u, 16*u, 2*u);
+        g.fillStyle(0x263944, 1).fillRoundedRect(-8*u, -6*u, 12*u, 12*u, 1*u);
+        g.lineStyle(1.2*u, 0x90e4f1, 0.9).strokeRoundedRect(-7*u, -5*u, 10*u, 10*u, 1*u);
+        g.fillStyle(0x46545f, 1).fillRoundedRect(5*u, -6*u, 4*u, 12*u, 1*u);
+        dot(7, -3, 0.8, pink); dot(7, 0, 0.8, gold); dot(7, 3, 0.8, 0x75efc1);
+        g.fillStyle(0xff873f, 0.9).fillCircle(-1*u, 1*u, 3.2*u); dot(-1, 1, 1.3, 0xffe6a0);
+        bar(-4, 8, 4, 8, ink, 2); break;
+      case 'hydraulicCarCrusher':
+        g.fillStyle(0x515d66, 1).fillRect(-9*u, -10*u, 4*u, 20*u).fillRect(5*u, -10*u, 4*u, 20*u);
+        g.fillStyle(0xe75f55, 1).fillRoundedRect(-10*u, -10*u, 20*u, 4*u, 1*u);
+        g.fillStyle(0x9caab1, 1).fillRoundedRect(-7*u, -5*u, 14*u, 4*u, 1*u);
+        g.fillStyle(0x4d8291, 1).fillRoundedRect(-6*u, 3*u, 12*u, 5*u, 1.5*u);
+        dot(-3, 2, 1.2, gold); dot(3, 2, 1.2, gold); bar(-7, 9, 7, 9, cream, 1); break;
+      case 'sentientTrafficLight':
+        g.fillStyle(0x354553, 1).fillRoundedRect(-6*u, -10*u, 12*u, 20*u, 2*u);
+        dot(0, -6, 2.6, 0xff5d62); dot(0, 0, 2.6, 0xffd15e); dot(0, 6, 2.6, 0x62df91);
+        g.fillStyle(0x87959a, 1).fillRect(-1.2*u, 10*u, 2.4*u, 4*u);
+        bar(-5, 14, 5, 14, ink, 2); break;
     }
     return g;
   }
