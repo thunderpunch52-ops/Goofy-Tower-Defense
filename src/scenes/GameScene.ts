@@ -1774,12 +1774,13 @@ export class GameScene extends Phaser.Scene {
     art.fillStyle(heavy ? 0x82452f : 0xa87543, 1).lineStyle(1, 0x402719, 1)
       .fillTriangle(-BOARD.cell * 0.82, -BOARD.cell * 0.75, 0, -BOARD.cell * 1.05, 0, -BOARD.cell * 0.58).strokeTriangle(-BOARD.cell * 0.82, -BOARD.cell * 0.75, 0, -BOARD.cell * 1.05, 0, -BOARD.cell * 0.58)
       .fillTriangle(BOARD.cell * 0.82, -BOARD.cell * 0.75, 0, -BOARD.cell * 1.05, 0, -BOARD.cell * 0.58).strokeTriangle(BOARD.cell * 0.82, -BOARD.cell * 0.75, 0, -BOARD.cell * 1.05, 0, -BOARD.cell * 0.58)
-      .lineStyle(1.8, 0xf5dfb0, 1).lineBetween(-BOARD.cell * 0.68, 0, BOARD.cell * 0.68, 0)
-      .fillStyle(0xfff3cf, 1).fillCircle(-BOARD.cell * 0.28, -BOARD.cell * 0.18, BOARD.cell * 0.1).fillCircle(BOARD.cell * 0.28, -BOARD.cell * 0.18, BOARD.cell * 0.1)
-      .lineStyle(1.2, 0x402719, 1).lineBetween(-BOARD.cell * 0.2, BOARD.cell * 0.22, BOARD.cell * 0.2, BOARD.cell * 0.22);
+      .lineStyle(2.5, 0xf5dfb0, 1).lineBetween(-BOARD.cell * 0.68, 0, BOARD.cell * 0.68, 0)
+      .fillStyle(0xfff3cf, 1).fillCircle(-BOARD.cell * 0.28, -BOARD.cell * 0.18, BOARD.cell * 0.18).fillCircle(BOARD.cell * 0.28, -BOARD.cell * 0.18, BOARD.cell * 0.18)
+      .fillStyle(0x24252a, 1).fillCircle(-BOARD.cell * 0.28, -BOARD.cell * 0.18, BOARD.cell * 0.07).fillCircle(BOARD.cell * 0.28, -BOARD.cell * 0.18, BOARD.cell * 0.07)
+      .lineStyle(1.8, 0x402719, 1).lineBetween(-BOARD.cell * 0.2, BOARD.cell * 0.22, BOARD.cell * 0.2, BOARD.cell * 0.22);
     if (heavy) art.lineStyle(1.3, 0xf4c86a, 0.95).strokeRect(-BOARD.cell * 0.55, -BOARD.cell * 0.45, BOARD.cell * 1.1, BOARD.cell * 0.9);
-    const label = this.add.text(0, BOARD.cell * 0.57, heavy ? '★' : tower.ranks[0]! >= 3 ? 'GRUNT' : 'GUARD', { fontFamily: 'Arial', fontSize: heavy ? '5px' : '4px', color: '#fff5d7', fontStyle: 'bold', stroke: '#402719', strokeThickness: 1 }).setOrigin(0.5);
-    const sprite = this.addToBoard(this.add.container(0, 0, [shell, art, label]).setDepth(5));
+    const label = this.add.text(0, BOARD.cell * 0.57, heavy ? '★' : tower.ranks[0]! >= 3 ? 'GRUNT' : 'GUARD', { fontFamily: 'Arial', fontSize: heavy ? '7px' : '6px', color: '#fff5d7', fontStyle: 'bold', stroke: '#402719', strokeThickness: 1 }).setOrigin(0.5);
+    const sprite = this.addToBoard(this.add.container(0, 0, [shell, art, label]).setDepth(8));
     const position = this.positionOnRoute(spot.progress, spot.route);
     sprite.setPosition(position.x, position.y);
     this.boxGuards.push({ progress: spot.progress, route: spot.route, hp: maxHp, maxHp,
@@ -1853,10 +1854,13 @@ export class GameScene extends Phaser.Scene {
     }
     const normal = this.boxGuards.filter((guard) => guard.tower === tower && !guard.heavy).length;
     const desired = tower.ranks[0]! >= 5 ? 8 : tower.ranks[0]! >= 3 ? 4 : 1;
-    const deploy = tower.passiveUpgradeTimers.get('cardboard-deploy') ?? this.simTime + 4;
+    // Start deployment immediately; then reveal the tier-3 squad in quick
+    // stages so the new summon path is obvious as soon as it is purchased.
+    const deploy = tower.passiveUpgradeTimers.get('cardboard-deploy') ?? this.simTime;
     if (normal < desired && this.simTime >= deploy && this.simTime >= (tower.passiveUpgradeTimers.get('cardboard-respawn') ?? 0)) {
-      if (this.spawnBoxGuard(tower)) tower.passiveUpgradeTimers.set('cardboard-deploy', this.simTime + 4);
-      else tower.passiveUpgradeTimers.set('cardboard-deploy', this.simTime + 1);
+      const deployInterval = tower.ranks[0]! >= 3 ? 0.5 : 4;
+      if (this.spawnBoxGuard(tower)) tower.passiveUpgradeTimers.set('cardboard-deploy', this.simTime + deployInterval);
+      else tower.passiveUpgradeTimers.set('cardboard-deploy', this.simTime + 0.5);
     }
     if (this.simTime < activeUntil) {
       let heavyTimer = (tower.passiveUpgradeTimers.get('cardboard-heavy-deploy') ?? 0) - dt;
@@ -3735,6 +3739,9 @@ export class GameScene extends Phaser.Scene {
 
   private applyUpgrade(tower: PlacedTower, pathIndex: number, upgrade: UpgradeTier): void {
     tower.acquiredUpgrades.push(upgrade);
+    if (tower.spec.id === 'cardboardFortress' && pathIndex === 0 && upgrade.rank === 3) {
+      tower.passiveUpgradeTimers.set('cardboard-deploy', this.simTime);
+    }
     const text = upgrade.description.toLowerCase();
     if (tower.spec.id === 'hydraulicCarCrusher' && pathIndex === 2 && upgrade.rank === 2) tower.rangeMultiplier *= 1.05;
     const pct = Number(text.match(/[+]?([0-9]+(?:\.[0-9]+)?)%/)?.[1] ?? text.match(/([0-9]+(?:\.[0-9]+)?) percentage points?/)?.[1] ?? 0) / 100;
