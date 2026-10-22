@@ -144,8 +144,8 @@ export class ProgressionScene extends Phaser.Scene {
       milestones.fillStyle(complete ? 0x75efc1 : upcoming ? 0xffd15e : 0x35336b, 1)
         .lineStyle(2, complete ? 0xb8ffe0 : upcoming ? 0xffe39c : 0x7775aa, 1)
         .fillCircle(x, trackY, 9).strokeCircle(x, trackY, 9);
-      const labelY = index % 2 === 0 ? 205 : 235;
-      this.add.text(x, labelY, `LEVEL ${level}\n${milestoneRewards[index]}`, { fontFamily: 'Arial', fontSize: '9px', color: complete ? C.mint : C.cream, fontStyle: 'bold', align: 'center', lineSpacing: 1, wordWrap: { width: 76 } }).setOrigin(0.5, 0).setData('tab', 'mastery');
+      const labelY = index % 2 === 0 ? 204 : 225;
+      this.add.text(x, labelY, `LEVEL ${level}\n${milestoneRewards[index]}`, { fontFamily: 'Arial', fontSize: '8px', color: complete ? C.mint : C.cream, fontStyle: 'bold', align: 'center', lineSpacing: 0, wordWrap: { width: 72 } }).setOrigin(0.5, 0).setData('tab', 'mastery');
     });
     milestones.fillStyle(0xffd15e, 1).fillCircle(progressPosition, trackY, 4);
     this.towerCardContainer = this.add.container(0, 0).setData('tab', 'mastery').setDepth(5);
