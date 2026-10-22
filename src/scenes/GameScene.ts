@@ -1822,7 +1822,9 @@ export class GameScene extends Phaser.Scene {
       guard.speed = 3 * (tower.ranks[0]! >= 5 ? 1.5 : 1);
       guard.armor = tower.ranks[0]! >= 6 ? 3 : 0;
       for (const [enemyId, timer] of guard.contactTimers) guard.contactTimers.set(enemyId, Math.max(0, timer - dt));
-      const front = this.enemies.filter((enemy) => enemy.alive && !enemy.spec.boss && enemy.route === guard.route
+      // Bosses do not get blocked by cardboard units, but they still collide
+      // with and take damage from the summons.
+      const front = this.enemies.filter((enemy) => enemy.alive && enemy.route === guard.route
         && enemy.pathProgress <= guard.progress + 0.65).sort((a, b) => b.pathProgress - a.pathProgress)[0];
       if (guard.stationed && (!front || guard.progress - front.pathProgress > 3.1)) guard.stationed = false;
       if (!guard.stationed) {
@@ -1847,7 +1849,7 @@ export class GameScene extends Phaser.Scene {
         continue;
       }
       guard.attackTimer = Math.max(0, guard.attackTimer - dt);
-      const contact = this.enemies.find((enemy) => enemy.alive && !enemy.spec.boss && enemy.route === guard.route && Math.abs(enemy.pathProgress - guard.progress) <= 0.65);
+      const contact = this.enemies.find((enemy) => enemy.alive && enemy.route === guard.route && Math.abs(enemy.pathProgress - guard.progress) <= 0.65);
       if (!contact) continue;
       const collisionTimer = guard.contactTimers.get(contact.id) ?? 0;
       if (collisionTimer <= 0) {
@@ -2180,7 +2182,14 @@ export class GameScene extends Phaser.Scene {
       if (roomba.sweeper) {
         const crushed = collisions.find((enemy) => !enemy.spec.boss && !enemy.spec.miniboss && enemy.spec.hp <= 250);
         if (crushed) this.damageEnemy(crushed, roomba.tower, crushed.hp, true);
-        roomba.attackTimer = 0.25;
+        // The sweeper can instantly clear eligible small enemies, but it
+        // still needs a visible, non-execute hit against bosses and heavies.
+        roomba.attackTimer = Math.max(0, roomba.attackTimer - dt);
+        const durableTarget = collisions.find((enemy) => enemy.alive && (enemy.spec.boss || enemy.spec.miniboss || enemy.spec.hp > 250));
+        if (durableTarget && roomba.attackTimer <= 0) {
+          this.damageEnemy(durableTarget, roomba.tower, 30, true);
+          roomba.attackTimer = 1;
+        }
         continue;
       }
       roomba.attackTimer -= dt;
@@ -3388,6 +3397,8 @@ export class GameScene extends Phaser.Scene {
     const actualHpRemoved = Math.min(enemy.hp, damage);
     enemy.hp -= damage;
     const creditSource = tower ?? damageCreditSource;
+    // Summoned units pass their owning tower here so only actual HP removed
+    // contributes to that tower's wave damage and mastery score.
     if (creditSource && actualHpRemoved > 0) this.waveDamageByTower.set(creditSource, (this.waveDamageByTower.get(creditSource) ?? 0) + actualHpRemoved);
     if (tower && singleTargetHit && enemy.spec.ability === 'bubbleBath' && damage > 50) this.spawnSoapPuddle(enemy.pathProgress, enemy.route);
     if (tower && singleTargetHit) this.leaveTrackResidue(tower, enemy.pathProgress, enemy.route);
@@ -3530,8 +3541,11 @@ export class GameScene extends Phaser.Scene {
     if (this.mapPreview || (this.endlessMode && this.endlessModifiersEnabled) || this.waveTotalHp <= 0) return;
     const attackScores = new Map<string, number>();
     for (const tower of this.towers) {
-      if (!this.copyHasAttackRole(tower)) continue;
       const damage = this.waveDamageByTower.get(tower) ?? 0;
+      // Cardboard Fortress stays a support tower until Tier 3, but its
+      // summons can deal collision damage before then. Credit that damage
+      // toward mastery just like its later combat paths.
+      if (!this.copyHasAttackRole(tower) && !(tower.spec.id === 'cardboardFortress' && damage > 0)) continue;
       attackScores.set(tower.spec.id, (attackScores.get(tower.spec.id) ?? 0) + damage);
     }
     const awards = this.awardRankedMeasure(attackScores, (damage) => damage / this.waveTotalHp >= 0.1);
