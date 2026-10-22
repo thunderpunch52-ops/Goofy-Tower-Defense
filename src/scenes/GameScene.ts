@@ -64,8 +64,8 @@ interface TrackResidue { progress: number; route: Tile[]; expiresAt: number; tic
 interface MiniGnome { progress: number; route: Tile[]; speed: number; sprite: Phaser.GameObjects.Container; tower: PlacedTower }
 interface MiniRoomba { progress: number; route: Tile[]; direction: 1 | -1; speed: number; patrolMin: number; patrolMax: number; sweeper: boolean; hp: number; attackTimer: number; sprite: Phaser.GameObjects.Container; hpBar: Phaser.GameObjects.Rectangle; tower: PlacedTower }
 interface BoxGuard { progress: number; route: Tile[]; hp: number; maxHp: number; armor: number; speed: number; stationed: boolean; attackTimer: number; contactTimers: Map<number, number>; sprite: Phaser.GameObjects.Container; hpBarBack: Phaser.GameObjects.Rectangle; hpBar: Phaser.GameObjects.Rectangle; tower: PlacedTower; heavy: boolean; despawnAt: number }
-interface BoxDrone { sprite: Phaser.GameObjects.Container; tower: PlacedTower; attackTimer: number; bombTimer: number; temporaryUntil: number }
-interface BoxTurret { tile: Tile; sprite: Phaser.GameObjects.Container; tower: PlacedTower; attackTimer: number; temporaryUntil: number }
+interface BoxDrone { sprite: Phaser.GameObjects.Container; hpBarBack: Phaser.GameObjects.Rectangle; hpBar: Phaser.GameObjects.Rectangle; hp: number; maxHp: number; tower: PlacedTower; attackTimer: number; bombTimer: number; temporaryUntil: number }
+interface BoxTurret { tile: Tile; route: Tile[]; progress: number; sprite?: Phaser.GameObjects.Container; hpBarBack?: Phaser.GameObjects.Rectangle; hpBar?: Phaser.GameObjects.Rectangle; statsLabel?: Phaser.GameObjects.Text; hp: number; maxHp: number; armor: number; hyperarmor: number; attackTimer: number; contactTimers: Map<number, number>; rebuildAt: number; tower: PlacedTower; temporaryUntil: number }
 interface PendingImpact { enemyId: number; tower: PlacedTower; damage: number; singleTargetHit: boolean; dueAt: number }
 interface RouteArrow { route: Tile[]; progress: number; elapsed: number; graphic: Phaser.GameObjects.Graphics }
 interface CampaignMutation { id: string; name: string; description: string; side: 'GOOD' | 'BAD' | 'HELL' | 'UNIQUE'; stackCap: number; stackable?: boolean }
@@ -269,8 +269,8 @@ export class GameScene extends Phaser.Scene {
     this.miniGnomes.splice(0).forEach((gnome) => gnome.sprite.destroy());
     this.miniRoombas.splice(0).forEach((roomba) => { roomba.sprite.destroy(); roomba.hpBar.destroy(); });
     this.boxGuards.splice(0).forEach((guard) => { guard.sprite.destroy(); guard.hpBar.destroy(); guard.hpBarBack.destroy(); });
-    this.boxDrones.splice(0).forEach((drone) => drone.sprite.destroy());
-    this.boxTurrets.splice(0).forEach((turret) => turret.sprite.destroy());
+    this.boxDrones.splice(0).forEach((drone) => { drone.sprite.destroy(); drone.hpBar.destroy(); drone.hpBarBack.destroy(); });
+    this.boxTurrets.splice(0).forEach((turret) => this.destroyBoxTurretVisuals(turret));
     this.soapPuddles.splice(0).forEach((puddle) => puddle.sprite.destroy());
     this.pendingImpacts.length = 0;
     this.routeArrows.length = 0;
@@ -533,6 +533,9 @@ export class GameScene extends Phaser.Scene {
     tower.helperPigeons.forEach((bird) => bird.destroy());
     tower.helperPigeons.length = 0;
     tower.helperPigeonCooldowns.length = 0;
+    for (const unit of this.boxGuards.filter((entry) => entry.tower === tower)) { unit.sprite.destroy(); unit.hpBar.destroy(); unit.hpBarBack.destroy(); this.boxGuards.splice(this.boxGuards.indexOf(unit), 1); }
+    for (const unit of this.boxDrones.filter((entry) => entry.tower === tower)) { unit.sprite.destroy(); unit.hpBar.destroy(); unit.hpBarBack.destroy(); this.boxDrones.splice(this.boxDrones.indexOf(unit), 1); }
+    for (const unit of this.boxTurrets.filter((entry) => entry.tower === tower)) { this.destroyBoxTurretVisuals(unit); this.boxTurrets.splice(this.boxTurrets.indexOf(unit), 1); }
     for (let puddleIndex = this.guanoPuddles.length - 1; puddleIndex >= 0; puddleIndex -= 1) {
       const puddle = this.guanoPuddles[puddleIndex]!;
       if (puddle.tower !== tower) continue;
@@ -1737,7 +1740,9 @@ export class GameScene extends Phaser.Scene {
     for (let index = this.miniGnomes.length - 1; index >= 0; index -= 1) {
       const gnome = this.miniGnomes[index]!;
       gnome.progress -= gnome.speed * dt;
-      if (gnome.progress <= 0) {
+      // Clear the summon just before it reaches the entrance so it can never
+      // idle at the route endpoint or linger there between frames.
+      if (gnome.progress <= 0.5) {
         gnome.sprite.destroy(); this.miniGnomes.splice(index, 1); continue;
       }
       const at = this.positionOnRoute(gnome.progress, gnome.route);
@@ -1807,6 +1812,7 @@ export class GameScene extends Phaser.Scene {
       tower.passiveUpgradeTimers.set('cardboard-matrix-until', this.simTime + 15);
       tower.passiveUpgradeTimers.set('cardboard-matrix-ready', this.simTime + 160);
       tower.passiveUpgradeTimers.set('cardboard-matrix-deploy', 0);
+      tower.passiveUpgradeTimers.set('cardboard-matrix-deployed', 0);
     }
     const guards = this.boxGuards.filter((guard) => guard.tower === tower);
     for (const guard of guards) {
@@ -1832,9 +1838,12 @@ export class GameScene extends Phaser.Scene {
       guard.hpBar.setPosition(at.x - barWidth / 2, at.y - BOARD.cell * 1.12)
         .setSize(barWidth * Math.max(0, guard.hp / guard.maxHp), Math.max(2, BOARD.cell * 0.13))
         .setFillStyle(guard.hp / guard.maxHp <= 0.3 ? 0xef7e70 : guard.hp / guard.maxHp <= 0.6 ? 0xf4c86a : 0x7ce0a0);
-      if (!guard.heavy && guard.progress <= 0) {
+      // Guards and heavy grunts run toward the entrance. Remove them as soon
+      // as they reach its final half-tile, even if an enemy could otherwise
+      // keep them stationed at the endpoint.
+      if (guard.progress <= 0.5) {
         guard.sprite.destroy(); guard.hpBar.destroy(); guard.hpBarBack.destroy(); this.boxGuards.splice(this.boxGuards.indexOf(guard), 1);
-        tower.passiveUpgradeTimers.set('cardboard-deploy', this.simTime + (tower.ranks[0]! >= 3 ? 0.5 : 4));
+        if (!guard.heavy) tower.passiveUpgradeTimers.set('cardboard-deploy', this.simTime + (tower.ranks[0]! >= 3 ? 0.5 : 4));
         continue;
       }
       guard.attackTimer = Math.max(0, guard.attackTimer - dt);
@@ -1895,15 +1904,26 @@ export class GameScene extends Phaser.Scene {
     for (let i = droneList.length - 1; i >= 0; i -= 1) {
       const drone = droneList[i]!;
       if (drone.temporaryUntil > 0 && this.simTime >= drone.temporaryUntil) {
-        drone.sprite.destroy(); this.boxDrones.splice(this.boxDrones.indexOf(drone), 1); continue;
+        drone.sprite.destroy(); drone.hpBar.destroy(); drone.hpBarBack.destroy(); this.boxDrones.splice(this.boxDrones.indexOf(drone), 1); continue;
       }
       const center = this.towerCenter(tower.tile, tower.spec);
       const phase = this.simTime * 1.4 + i * Math.PI * 2 / Math.max(1, droneList.length);
-      drone.sprite.setPosition(center.x + Math.cos(phase) * BOARD.cell * 1.5, center.y + Math.sin(phase) * BOARD.cell * 1.1 - 10);
+      const droneX = center.x + Math.cos(phase) * BOARD.cell * 1.8;
+      const droneY = center.y + Math.sin(phase) * BOARD.cell * 1.45 - 10;
+      drone.sprite.setPosition(droneX, droneY);
+      const droneBarWidth = BOARD.cell * 1.1;
+      drone.hpBarBack.setPosition(droneX, droneY - 6.5);
+      drone.hpBar.setPosition(droneX - droneBarWidth / 2, droneY - 6.5)
+        .setSize(droneBarWidth * Math.max(0, drone.hp / drone.maxHp), 1.5)
+        .setFillStyle(drone.hp / drone.maxHp <= 0.3 ? 0xef7e70 : drone.hp / drone.maxHp <= 0.6 ? 0xf4c86a : 0x7ce0a0);
+      const rangeTiles = 10 * tower.rangeMultiplier;
+      const droneTargets = this.enemies.filter((enemy) => enemy.alive
+        && Phaser.Math.Distance.Between(droneX, droneY, enemy.sprite.x, enemy.sprite.y) / BOARD.cell <= rangeTiles);
+      const dronePriority = tower.ranks[1]! >= 4 ? tower.priority : 'First';
       drone.attackTimer -= dt;
       if (drone.attackTimer <= 0) {
-        const targets = this.enemies.filter((enemy) => enemy.alive && this.distanceToPathTiles(this.towerGridCenter(tower), enemy.pathProgress, enemy.route) <= 10 * tower.rangeMultiplier);
-        const target = this.chooseTarget(targets, tower.priority);
+        const targets = droneTargets;
+        const target = this.chooseTarget(targets, dronePriority);
         if (target) {
           const affected = tower.ranks[1]! >= 5 ? targets.filter((enemy) => enemy.route === target.route && Math.abs(enemy.pathProgress - target.pathProgress) <= 1).slice(0, 2) : [target];
           for (const enemy of affected) {
@@ -1917,7 +1937,7 @@ export class GameScene extends Phaser.Scene {
       }
       drone.bombTimer -= dt;
       if (tower.ranks[1]! >= 6 && drone.bombTimer <= 0) {
-        const target = this.chooseTarget(this.enemies.filter((enemy) => enemy.alive && this.distanceToPathTiles(this.towerGridCenter(tower), enemy.pathProgress, enemy.route) <= 10 * tower.rangeMultiplier), tower.priority);
+        const target = this.chooseTarget(droneTargets, dronePriority);
         if (target) for (const enemy of this.enemies) if (enemy.alive && enemy.route === target.route && Math.abs(enemy.pathProgress - target.pathProgress) <= 1) this.damageEnemy(enemy, tower, 80 * tower.damageMultiplier);
         drone.bombTimer = 8;
       }
@@ -1931,38 +1951,95 @@ export class GameScene extends Phaser.Scene {
       const shell = this.add.circle(0, 0, 4, 0x63dcff, 1).setStrokeStyle(1.3, 0xe4fbff, 1);
       const wing = this.add.ellipse(0, 0, 11, 3, 0xe7d8ac, 0.95);
       const sprite = this.addToBoard(this.add.container(0, 0, [wing, shell]).setDepth(6));
-      this.boxDrones.push({ sprite, tower, attackTimer: Math.random() * 0.4, bombTimer: 8, temporaryUntil: normalDroneCount < desiredDrones ? 0 : temporaryUntil });
+      const droneHp = 80;
+      const hpBarBack = this.addToBoard(this.add.rectangle(0, 0, BOARD.cell * 1.1, 2.2, 0x20252a, 0.95).setDepth(7));
+      const hpBar = this.addToBoard(this.add.rectangle(0, 0, BOARD.cell * 1.1, 1.5, 0x7ce0a0, 1).setOrigin(0, 0.5).setDepth(8));
+      this.boxDrones.push({ sprite, hpBarBack, hpBar, hp: droneHp, maxHp: droneHp, tower, attackTimer: Math.random() * 0.4, bombTimer: 8, temporaryUntil: normalDroneCount < desiredDrones ? 0 : temporaryUntil });
       droneDeploy = 4;
     }
     tower.passiveUpgradeTimers.set('cardboard-drone-deploy', droneDeploy);
     const turretList = this.boxTurrets.filter((turret) => turret.tower === tower);
     for (const turret of [...turretList]) {
       if (turret.temporaryUntil > 0 && this.simTime >= turret.temporaryUntil) {
-        turret.sprite.destroy(); this.boxTurrets.splice(this.boxTurrets.indexOf(turret), 1); continue;
+        this.destroyBoxTurretVisuals(turret); this.boxTurrets.splice(this.boxTurrets.indexOf(turret), 1); continue;
       }
+      if (turret.rebuildAt > 0) {
+        if (this.simTime < turret.rebuildAt) continue;
+        if (this.rebuildBoxTurret(turret)) turret.rebuildAt = 0;
+        else { turret.rebuildAt = this.simTime + 1; continue; }
+      }
+      if (!turret.sprite || !turret.hpBar || !turret.hpBarBack || !turret.statsLabel) continue;
+      // Turrets advance from the entrance toward the exit. They never block
+      // enemy movement; they pause only while a valid target is in range.
+      const turretAt = this.positionOnRoute(turret.progress, turret.route);
+      turret.sprite.setPosition(turretAt.x, turretAt.y);
+      const range = 16 * tower.rangeMultiplier * this.globalRangeMultiplier();
+      const inRange = this.enemies.filter((enemy) => enemy.alive
+        && Phaser.Math.Distance.Between(turretAt.x, turretAt.y, enemy.sprite.x, enemy.sprite.y) / BOARD.cell <= range);
+      const target = this.chooseTarget(inRange, tower.priority);
+      if (!target) {
+        turret.progress = Math.min(turret.route.length - 1, turret.progress + 2.5 * dt);
+        const moved = this.positionOnRoute(turret.progress, turret.route);
+        turret.sprite.setPosition(moved.x, moved.y);
+        turret.tile = turret.route[Math.min(turret.route.length - 1, Math.round(turret.progress))]!;
+      }
+      const at = this.positionOnRoute(turret.progress, turret.route);
+      const barWidth = BOARD.cell * 1.25;
+      turret.hpBarBack.setPosition(at.x, at.y - 7);
+      turret.hpBar.setPosition(at.x - barWidth / 2, at.y - 7)
+        .setSize(barWidth * Math.max(0, turret.hp / turret.maxHp), 1.5)
+        .setFillStyle(turret.hp / turret.maxHp <= 0.3 ? 0xef7e70 : turret.hp / turret.maxHp <= 0.6 ? 0xf4c86a : 0x7ce0a0);
+      turret.statsLabel.setPosition(at.x, at.y + 5)
+        .setText(`${Math.ceil(turret.hp)}/${turret.maxHp} · A${turret.armor} · H${Math.round(turret.hyperarmor * 100)}%`);
+      for (const [enemyId, timer] of turret.contactTimers) turret.contactTimers.set(enemyId, Math.max(0, timer - dt));
+      for (const enemy of this.enemies) {
+        if (!enemy.alive || Phaser.Math.Distance.Between(at.x, at.y, enemy.sprite.x, enemy.sprite.y) / BOARD.cell > 1) continue;
+        const contactTimer = turret.contactTimers.get(enemy.id) ?? 0;
+        if (contactTimer > 0) continue;
+        const rawBaseDamage = ENEMIES[enemy.spec.id as EnemyKey]?.leak ?? enemy.spec.leak;
+        const raw = starScaledLeak(rawBaseDamage, this.star);
+        const afterArmor = Math.max(1, raw - turret.armor);
+        const damage = Math.max(1, Math.floor(afterArmor * (1 - turret.hyperarmor / 2)));
+        turret.hp = Math.max(0, turret.hp - damage);
+        turret.contactTimers.set(enemy.id, 1);
+        if (turret.hp <= 0) {
+          this.destroyBoxTurretVisuals(turret);
+          if (turret.temporaryUntil === 0) turret.rebuildAt = this.simTime + 10;
+          else this.boxTurrets.splice(this.boxTurrets.indexOf(turret), 1);
+          break;
+        }
+      }
+      if (turret.rebuildAt > 0 || !turret.sprite) continue;
       turret.attackTimer -= dt;
       if (turret.attackTimer > 0) continue;
       const mapWide = (tower.passiveUpgradeTimers.get('cardboard-matrix-until') ?? 0) > this.simTime;
-      const inRange = this.enemies.filter((enemy) => enemy.alive && (mapWide || this.distanceToPathTiles(turret.tile, enemy.pathProgress, enemy.route) <= 16 * tower.rangeMultiplier));
-      const target = this.chooseTarget(inRange, tower.priority);
-      if (!target) { turret.attackTimer = 0.2; continue; }
+      const targets = this.enemies.filter((enemy) => enemy.alive && (mapWide
+        || Phaser.Math.Distance.Between(turret.sprite!.x, turret.sprite!.y, enemy.sprite.x, enemy.sprite.y) / BOARD.cell <= range));
+      const attackTarget = this.chooseTarget(targets, tower.priority);
+      if (!attackTarget) { turret.attackTimer = 0.2; continue; }
       const shots = tower.ranks[2]! >= 5 ? 2 : 1;
-      for (let shot = 0; shot < shots; shot += 1) this.damageEnemy(target, tower, 120 * tower.damageMultiplier, true);
+      for (let shot = 0; shot < shots; shot += 1) this.damageEnemy(attackTarget, tower, 120 * tower.damageMultiplier, true);
       if (tower.ranks[2]! >= 4) {
-        for (const enemy of this.enemies) if (enemy.alive && enemy.route === target.route && Math.abs(enemy.pathProgress - target.pathProgress) <= 1) this.applySlow(enemy, 0.25, 2, tower);
+        for (const enemy of this.enemies) if (enemy.alive && enemy.route === attackTarget.route && Math.abs(enemy.pathProgress - attackTarget.pathProgress) <= 1) this.applySlow(enemy, 0.25, 2, tower);
       }
-      const from = this.tileCenter(turret.tile);
+      const from = { x: turret.sprite.x, y: turret.sprite.y };
       const beam = this.addToBoard(this.add.graphics().setDepth(6));
-      beam.lineStyle(2, 0xffb24d, 0.92).lineBetween(from.x, from.y, target.sprite.x, target.sprite.y);
+      beam.lineStyle(2, 0xffb24d, 0.92).lineBetween(from.x, from.y, attackTarget.sprite.x, attackTarget.sprite.y);
       this.tweens.add({ targets: beam, alpha: 0, duration: 150, onComplete: () => beam.destroy() });
       turret.attackTimer = 2;
     }
     const activeMatrix = (tower.passiveUpgradeTimers.get('cardboard-matrix-until') ?? 0) > this.simTime;
-    const maxTurrets = activeMatrix ? 4 : tower.ranks[2]! >= 3 ? 2 : 0;
+    const maxTurrets = tower.ranks[2]! >= 3 ? (activeMatrix ? 4 : 2) : 0;
     let turretDeploy = (tower.passiveUpgradeTimers.get('cardboard-turret-deploy') ?? 4) - dt;
     const currentTurrets = this.boxTurrets.filter((turret) => turret.tower === tower);
-    if (currentTurrets.length < maxTurrets && turretDeploy <= 0) {
-      if (this.spawnBoxArtillery(tower, activeMatrix)) turretDeploy = 4;
+    const matrixDeployed = tower.passiveUpgradeTimers.get('cardboard-matrix-deployed') ?? 0;
+    const mayDeploy = activeMatrix ? currentTurrets.length < maxTurrets && matrixDeployed < 2
+      : currentTurrets.length < maxTurrets;
+    if (mayDeploy && turretDeploy <= 0) {
+      if (this.spawnBoxArtillery(tower, activeMatrix)) {
+        turretDeploy = 4;
+        if (activeMatrix) tower.passiveUpgradeTimers.set('cardboard-matrix-deployed', matrixDeployed + 1);
+      }
       else turretDeploy = 1;
     }
     tower.passiveUpgradeTimers.set('cardboard-turret-deploy', turretDeploy);
@@ -1977,19 +2054,71 @@ export class GameScene extends Phaser.Scene {
       const adjacentRoad = [{ x: x - 1, y }, { x: x + 1, y }, { x, y: y - 1 }, { x, y: y + 1 }]
         .some((neighbor) => this.roadTiles.has(routeKey(neighbor)));
       const distance = Math.hypot(center.x - x, center.y - y);
-      if (adjacentRoad && distance <= 14 && !this.boxTurrets.some((turret) => turret.tile.x === x && turret.tile.y === y)
+      if (adjacentRoad && distance <= 14 && !this.boxTurrets.some((turret) => turret.sprite && turret.tile.x === x && turret.tile.y === y)
         && this.isBuildable(tile, oneTileSpec)) candidates.push(tile);
     }
     candidates.sort((a, b) => Math.hypot(center.x - a.x, center.y - a.y) - Math.hypot(center.x - b.x, center.y - b.y));
     const tile = candidates[0];
     if (!tile) return false;
+    const routes = this.visualRoutes.length ? this.visualRoutes : [this.route];
+    let route = routes[0]!;
+    let progress = 0;
+    let nearest = Number.POSITIVE_INFINITY;
+    const spawnAt = this.tileCenter(tile);
+    for (const candidate of routes) for (let index = 0; index < candidate.length; index += 1) {
+      const point = this.tileCenter(candidate[index]!);
+      const distance = Phaser.Math.Distance.Between(point.x, point.y, spawnAt.x, spawnAt.y);
+      if (distance < nearest) { nearest = distance; route = candidate; progress = index; }
+    }
+    const fortified = !temporary && tower.ranks[2]! >= 6;
+    const turret: BoxTurret = { tile: route[Math.round(progress)]!, route, progress, hp: fortified ? 300 : 100,
+      maxHp: fortified ? 300 : 100, armor: fortified ? 5 : 0, hyperarmor: fortified ? 0.1 : 0,
+      attackTimer: 0, contactTimers: new Map(), rebuildAt: 0, tower, temporaryUntil: temporary ? this.simTime + 15 : 0 };
+    this.createBoxTurretVisuals(turret);
+    const at = this.positionOnRoute(progress, route);
+    turret.sprite!.setPosition(at.x, at.y);
+    this.boxTurrets.push(turret);
+    return true;
+  }
+
+  private createBoxTurretVisuals(turret: BoxTurret): void {
     const base = this.add.rectangle(0, 0, BOARD.cell * 0.9, BOARD.cell * 0.9, 0xc99155, 1).setStrokeStyle(1, 0x402719, 1);
     const barrel = this.add.rectangle(0, -1, BOARD.cell * 0.62, 2, 0xffd15e, 1);
     const tag = this.add.text(0, 2, 'ART', { fontFamily: 'Arial', fontSize: '3px', color: '#fff5d7', fontStyle: 'bold' }).setOrigin(0.5);
-    const sprite = this.addToBoard(this.add.container(0, 0, [base, barrel, tag]).setDepth(4));
-    const at = this.tileCenter(tile);
-    sprite.setPosition(at.x, at.y);
-    this.boxTurrets.push({ tile, sprite, tower, attackTimer: 0, temporaryUntil: temporary ? this.simTime + 15 : 0 });
+    turret.sprite = this.addToBoard(this.add.container(0, 0, [base, barrel, tag]).setDepth(4));
+    const barWidth = BOARD.cell * 1.25;
+    turret.hpBarBack = this.addToBoard(this.add.rectangle(0, 0, barWidth, 2.2, 0x20252a, 0.95).setDepth(7));
+    turret.hpBar = this.addToBoard(this.add.rectangle(0, 0, barWidth, 1.5, 0x7ce0a0, 1).setOrigin(0, 0.5).setDepth(8));
+    turret.statsLabel = this.addToBoard(this.add.text(0, 0, '', { fontFamily: 'Arial', fontSize: '4px', color: '#fff5d7', fontStyle: 'bold', stroke: '#20252a', strokeThickness: 1 }).setOrigin(0.5).setDepth(8));
+  }
+
+  private destroyBoxTurretVisuals(turret: BoxTurret): void {
+    turret.sprite?.destroy(); turret.hpBar?.destroy(); turret.hpBarBack?.destroy(); turret.statsLabel?.destroy();
+    turret.sprite = undefined; turret.hpBar = undefined; turret.hpBarBack = undefined; turret.statsLabel = undefined;
+  }
+
+  private rebuildBoxTurret(turret: BoxTurret): boolean {
+    const positions: Array<{ route: Tile[]; progress: number; tile: Tile }> = [];
+    for (const route of (this.visualRoutes.length ? this.visualRoutes : [this.route])) {
+      for (let progress = 0; progress < route.length; progress += 1) {
+        const tile = route[progress]!;
+        const occupied = this.boxTurrets.some((other) => other !== turret && other.sprite
+          && other.tile.x === tile.x && other.tile.y === tile.y);
+        if (!occupied) positions.push({ route, progress, tile });
+      }
+    }
+    positions.sort((a, b) => a.progress - b.progress);
+    const spot = positions[0];
+    if (!spot) return false;
+    turret.route = spot.route; turret.progress = spot.progress; turret.tile = spot.tile;
+    turret.maxHp = turret.tower.ranks[2]! >= 6 ? 300 : 100;
+    turret.hp = turret.maxHp;
+    turret.armor = turret.tower.ranks[2]! >= 6 ? 5 : 0;
+    turret.hyperarmor = turret.tower.ranks[2]! >= 6 ? 0.1 : 0;
+    turret.attackTimer = 0; turret.contactTimers.clear();
+    this.createBoxTurretVisuals(turret);
+    const at = this.positionOnRoute(turret.progress, turret.route);
+    turret.sprite!.setPosition(at.x, at.y);
     return true;
   }
 
@@ -3772,6 +3901,21 @@ export class GameScene extends Phaser.Scene {
         if (!this.spawnBoxGuard(tower)) break;
       }
       tower.passiveUpgradeTimers.set('cardboard-deploy', this.simTime + 0.5);
+    }
+    if (tower.spec.id === 'cardboardFortress' && pathIndex === 1 && upgrade.rank === 3) {
+      tower.passiveUpgradeTimers.set('cardboard-drone-deploy', 0);
+    }
+    if (tower.spec.id === 'cardboardFortress' && pathIndex === 2 && upgrade.rank === 3) {
+      tower.passiveUpgradeTimers.set('cardboard-turret-deploy', 0);
+    }
+    if (tower.spec.id === 'cardboardFortress' && pathIndex === 2 && upgrade.rank === 6) {
+      for (const turret of this.boxTurrets.filter((unit) => unit.tower === tower && unit.temporaryUntil === 0)) {
+        turret.maxHp += 200;
+        turret.hp += 200;
+        turret.armor = 5;
+        turret.hyperarmor = 0.1;
+        turret.statsLabel?.setText(`${Math.ceil(turret.hp)}/${turret.maxHp} · A${turret.armor} · H${Math.round(turret.hyperarmor * 100)}%`);
+      }
     }
     const text = upgrade.description.toLowerCase();
     if (tower.spec.id === 'hydraulicCarCrusher' && pathIndex === 2 && upgrade.rank === 2) tower.rangeMultiplier *= 1.05;

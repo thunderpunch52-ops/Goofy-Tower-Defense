@@ -34,9 +34,9 @@ export const ADDED_TOWERS: readonly TowerSpec[] = [
       ], cardboardCosts),
       path('Mech-Box Artillery', [
         ['Heavy Bolts', '+5% artillery damage.'], ['Sturdy Base', '+10% artillery range.'],
-        ['Deployable Turret', 'Build up to 2 stationary artillery pieces on legal cells orthogonally adjacent to the road; each fires 120 physical damage at 0.5 shots/second with 16-tile range.'],
+        ['Deployable Turret', 'Deploy up to 2 mobile artillery turrets. Each starts with 100 HP, moves forward along the track until an enemy is within 16 tiles, then stops to attack for 120 physical damage at 0.5 shots per second. Enemies within 1 tile attack it once per second for their star-scaled Damage-to-Base value. Turrets do not block enemies.'],
         ['Shockwave Impact', 'Impacts slow enemies within 1 tile by 25% for 2 seconds.'], ['Dual Cannons', 'Fire two 120-damage shells per attack, with a 2-second attack interval.'],
-        ['Fortified Bunkers', 'Pieces gain 300 HP, 5 flat Armor, and 10% Hyperarmor. Enemy abilities must explicitly target structures. Destroyed pieces rebuild after 10 seconds, preferring their original cell.'],
+        ['Fortified Bunkers', 'Permanent turrets gain +200 current and maximum HP (300 maximum total), 5 flat Armor, and 10% Hyperarmor; existing damage is preserved. Destroyed permanent turrets rebuild after 10 seconds at the nearest available route position to the entrance, retrying once per second if blocked. Temporary turrets do not rebuild.'],
         ['Cardboard Artillery Matrix', 'For 15 seconds, allow 4 pieces, deploy up to 2 temporary pieces, and grant artillery map-wide range. Cooldown: 160 seconds.'],
       ], cardboardCosts),
     ],
