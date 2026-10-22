@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { ENEMIES, type EnemyKey } from '../game/content';
 import { TOWERS } from '../game/towers';
-import { exportProgressCode, importProgressCode, initializeProgress, saveTowerMastery, towerMastery, towerUnlocked, towerUnlockRequirement, xpToEnterLevel } from '../state/progression';
+import { exportProgressCode, importProgressCode, initializeProgress, saveTowerMastery, towerGemUnlockCost, towerMastery, towerUnlocked, towerUnlockRequirement, xpToEnterLevel } from '../state/progression';
 
 const W = 1280;
 const C = { ink: '#17152f', panel: '#201e40', panel2: '#2b2856', cream: '#fff5d7', muted: '#c4c3e5', mint: '#75efc1', gold: '#ffd15e', pink: '#ff6d9e', blue: '#63dcff' };
@@ -18,6 +18,10 @@ export class ProgressionScene extends Phaser.Scene {
   private bestiaryDetail?: Phaser.GameObjects.Text;
   private towerLabels: Phaser.GameObjects.Text[] = [];
   private towerLevelUpAlerts: Phaser.GameObjects.Text[] = [];
+  private towerCardContainer?: Phaser.GameObjects.Container;
+  private towerScrollThumb?: Phaser.GameObjects.Rectangle;
+  private towerScrollOffset = 0;
+  private towerScrollMax = 0;
   private enemyLabels: Phaser.GameObjects.Text[] = [];
   private enemyButtons: Phaser.GameObjects.Rectangle[] = [];
   private pathButtons: Phaser.GameObjects.Rectangle[] = [];
@@ -44,10 +48,15 @@ export class ProgressionScene extends Phaser.Scene {
     // reference to the previous visit's destroyed display objects before
     // rebuilding the progression UI, or later visits update stale controls.
     this.removeSaveFields();
+    this.input.off('wheel');
     this.tabObjects.length = 0;
     this.tabControls.length = 0;
     this.towerLabels.length = 0;
     this.towerLevelUpAlerts.length = 0;
+    this.towerCardContainer = undefined;
+    this.towerScrollThumb = undefined;
+    this.towerScrollOffset = 0;
+    this.towerScrollMax = 0;
     this.enemyLabels.length = 0;
     this.enemyButtons.length = 0;
     this.pathButtons.length = 0;
@@ -138,21 +147,57 @@ export class ProgressionScene extends Phaser.Scene {
       this.add.text(x, 205, `LEVEL ${level}\n${milestoneRewards[index]}`, { fontFamily: 'Arial', fontSize: '10px', color: complete ? C.mint : C.cream, fontStyle: 'bold', align: 'center', lineSpacing: 1, wordWrap: { width: 112 } }).setOrigin(0.5, 0).setData('tab', 'mastery');
     });
     milestones.fillStyle(0xffd15e, 1).fillCircle(progressPosition, trackY, 4);
+    this.towerCardContainer = this.add.container(0, 0).setData('tab', 'mastery').setDepth(5);
+    const maskShape = this.make.graphics({ x: 0, y: 0 });
+    maskShape.fillStyle(0xffffff).fillRect(48, 180, 515, 480);
+    this.towerCardContainer.setMask(maskShape.createGeometryMask());
+    maskShape.setVisible(false);
+    const visibleHeight = 480;
+    const rowCount = Math.ceil(TOWERS.length / 2);
+    const contentHeight = 188 + rowCount * 66 - 180;
+    this.towerScrollMax = Math.max(0, contentHeight - visibleHeight);
+    const scrollTrack = this.add.rectangle(574, 420, 10, visibleHeight, 0x17152f).setStrokeStyle(1, 0x7775aa).setData('tab', 'mastery').setDepth(6);
+    const thumbHeight = Math.max(48, visibleHeight * visibleHeight / contentHeight);
+    this.towerScrollThumb = this.add.rectangle(574, 180 + thumbHeight / 2, 8, thumbHeight, 0x63dcff).setStrokeStyle(1, 0xc8f6ff).setInteractive({ useHandCursor: true }).setData('tab', 'mastery').setDepth(7);
+    this.add.text(574, 667, 'SCROLL', { fontFamily: 'Arial', fontSize: '7px', color: C.blue, fontStyle: 'bold', align: 'center' }).setOrigin(0.5).setData('tab', 'mastery').setDepth(7);
+    this.input.setDraggable(this.towerScrollThumb);
+    this.towerScrollThumb.on('drag', (_pointer: Phaser.Input.Pointer, _dragX: number, dragY: number) => {
+      const half = thumbHeight / 2;
+      const top = 180 + half;
+      const bottom = 660 - half;
+      this.towerScrollThumb?.setY(Phaser.Math.Clamp(dragY, top, bottom));
+      const ratio = (this.towerScrollThumb!.y - top) / Math.max(1, bottom - top);
+      this.towerScrollOffset = ratio * this.towerScrollMax;
+      this.towerCardContainer?.setY(-this.towerScrollOffset);
+    });
+    this.input.on('wheel', (pointer: Phaser.Input.Pointer, _objects: Phaser.GameObjects.GameObject[], _dx: number, dy: number) => {
+      if (this.tab !== 'mastery' || pointer.x < 40 || pointer.x > 585 || pointer.y < 175 || pointer.y > 670) return;
+      this.towerScrollOffset = Phaser.Math.Clamp(this.towerScrollOffset + dy * 0.65, 0, this.towerScrollMax);
+      this.towerCardContainer?.setY(-this.towerScrollOffset);
+      const half = thumbHeight / 2;
+      const top = 180 + half;
+      const bottom = 660 - half;
+      this.towerScrollThumb?.setY(top + this.towerScrollOffset / Math.max(1, this.towerScrollMax) * (bottom - top));
+    });
     TOWERS.forEach((tower, index) => {
-      const col = index < 7 ? 0 : 1;
-      const row = index % 7;
+      const col = index % 2;
+      const row = Math.floor(index / 2);
       const x = 65 + col * 260;
       const y = 188 + row * 66;
       const card = this.add.rectangle(x + 120, y + 20, 238, 54, 0x201e40).setStrokeStyle(1, 0x625e9a).setInteractive({ useHandCursor: true }).setData('tab', 'mastery');
       const label = this.add.text(x + 14, y + 8, '', { fontFamily: 'Arial', fontSize: '12px', color: C.cream, fontStyle: 'bold', wordWrap: { width: 214 }, maxLines: 2, lineSpacing: 1 }).setData('tab', 'mastery');
       const levelUpAlert = this.add.text(x + 224, y + 4, '!', { fontFamily: 'Arial', fontSize: '18px', color: C.pink, fontStyle: 'bold', stroke: C.ink, strokeThickness: 3 }).setOrigin(0.5, 0).setVisible(false).setData('tab', 'mastery');
-      const select = () => { this.selectedTower = tower.id; this.selectedMasteryPath = undefined; this.masteryUpgradeOpen = false; this.updateMasteryDetails(); };
+      const select = (pointer?: Phaser.Input.Pointer) => {
+        if (pointer && (pointer.y < 180 || pointer.y > 660 || pointer.x < 48 || pointer.x > 563)) return;
+        this.selectedTower = tower.id; this.selectedMasteryPath = undefined; this.masteryUpgradeOpen = false; this.updateMasteryDetails();
+      };
       card.on('pointerdown', select);
       label.setInteractive({ useHandCursor: true }).on('pointerdown', select);
+      this.towerCardContainer!.add([card, label, levelUpAlert]);
       this.towerLabels.push(label);
       this.towerLevelUpAlerts.push(levelUpAlert);
-      this.tabObjects.push(card, label, levelUpAlert);
     });
+    this.tabObjects.push(this.towerCardContainer, scrollTrack, this.towerScrollThumb);
     this.masteryDetail = this.add.text(632, 251, '', { fontFamily: 'Trebuchet MS', fontSize: '15px', color: C.cream, lineSpacing: 5, wordWrap: { width: 570 } }).setData('tab', 'mastery');
     const pathNames = ['PATH 1', 'PATH 2', 'PATH 3'];
     pathNames.forEach((name, index) => {
@@ -219,8 +264,13 @@ export class ProgressionScene extends Phaser.Scene {
     this.masteryUpgradeDenyLabel?.setVisible(Boolean(canChoose && this.masteryUpgradeOpen));
     const progress = this.registry.get('mapProgress') as { gems: number };
     const canSpend = unlocked && progress.gems > 0 && record.level < 15;
-    this.gemButton?.setFillStyle(canSpend ? 0x514321 : 0x201e40).setAlpha(canSpend ? 1 : 0.6);
-    this.gemLabel?.setText(`SPEND 1 GEM · +100 XP  (${progress.gems} available)`);
+    const gemUnlockCost = towerGemUnlockCost(tower.id);
+    const showGemUnlock = !unlocked && gemUnlockCost > 0;
+    const canUnlock = showGemUnlock && progress.gems >= gemUnlockCost;
+    this.gemButton?.setVisible(showGemUnlock || canSpend).setFillStyle(showGemUnlock ? (canUnlock ? 0x514321 : 0x201e40) : (canSpend ? 0x514321 : 0x201e40)).setAlpha(showGemUnlock ? (canUnlock ? 1 : 0.6) : (canSpend ? 1 : 0.6));
+    this.gemLabel?.setVisible(showGemUnlock || unlocked).setText(showGemUnlock
+      ? `UNLOCK · ${gemUnlockCost} GEMS  (${progress.gems} available)`
+      : `SPEND 1 GEM · +100 XP  (${progress.gems} available)`);
   }
 
   private selectMasteryPath(index: number): void {
@@ -263,6 +313,19 @@ export class ProgressionScene extends Phaser.Scene {
     const tower = TOWERS.find((candidate) => candidate.id === this.selectedTower)!;
     const record = towerMastery(this.registry, tower.id);
     const progress = this.registry.get('mapProgress') as { gems: number; unlockedMaps: string[] };
+    const gemUnlockCost = towerGemUnlockCost(tower.id);
+    if (!towerUnlocked(this.registry, tower.id) && gemUnlockCost > 0) {
+      if (progress.gems < gemUnlockCost) return;
+      progress.gems -= gemUnlockCost;
+      this.registry.set('mapProgress', progress);
+      const unlocks = new Set((this.registry.get('towerUnlocks') as string[] | undefined) ?? []);
+      unlocks.add(tower.id);
+      this.registry.set('towerUnlocks', [...unlocks]);
+      this.status?.setText(`${tower.name.toUpperCase()} UNLOCKED`);
+      this.updateMasteryDetails();
+      this.refreshTowerCards();
+      return;
+    }
     if (!towerUnlocked(this.registry, tower.id) || progress.gems < 1 || record.level >= 15) return;
     progress.gems -= 1;
     this.registry.set('mapProgress', progress);

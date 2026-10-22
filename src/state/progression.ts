@@ -104,14 +104,19 @@ const CAMPAIGN_TOWER_UNLOCKS: Record<string, { stage: number; star: number }> = 
   giantMechTeddyBear: { stage: 5, star: 3 },
 };
 const LEVEL_TOWER_UNLOCKS: Record<string, number> = { anvilTrapdoor: 2, discoTurret: 5, catLaserPointer: 10, cosmicRoomba: 15 };
+const GEM_TOWER_UNLOCKS: Record<string, number> = { cardboardFortress: 20 };
+const CAMPAIGN_TOWER_UNLOCKS_ADDED: Record<string, { stage: number; star: number }> = {
+  arcadeClawMachine: { stage: 4, star: 2 }, sentientMicrowaveOven: { stage: 3, star: 3 }, hydraulicCarCrusher: { stage: 1, star: 3 },
+};
+const LEVEL_TOWER_UNLOCKS_ADDED: Record<string, number> = { sodaMachineMech: 3, laserOfficePrinter: 6, sentientTrafficLight: 12 };
 
 export function towerUnlocked(registry: RegistryLike, towerId: string): boolean {
   if (towerId === 'angryPigeon') return true;
   const importedUnlocks = registry.get('towerUnlocks') as string[] | undefined;
   if (importedUnlocks?.includes(towerId)) return true;
-  const campaign = CAMPAIGN_TOWER_UNLOCKS[towerId];
+  const campaign = CAMPAIGN_TOWER_UNLOCKS[towerId] ?? CAMPAIGN_TOWER_UNLOCKS_ADDED[towerId];
   if (campaign) return Boolean(registry.get(`stage${campaign.stage}Star${campaign.star}Cleared`));
-  const level = LEVEL_TOWER_UNLOCKS[towerId];
+  const level = LEVEL_TOWER_UNLOCKS[towerId] ?? LEVEL_TOWER_UNLOCKS_ADDED[towerId];
   return level !== undefined && Number(registry.get('playerLevel') ?? 1) >= level;
 }
 
@@ -215,8 +220,12 @@ function PhaserLikeInt(value: unknown, min: number, max: number): number {
 }
 
 export function towerUnlockRequirement(towerId: string): string {
-  const campaign = CAMPAIGN_TOWER_UNLOCKS[towerId];
+  const gemCost = GEM_TOWER_UNLOCKS[towerId];
+  if (gemCost) return `Spend ${gemCost} gems`;
+  const campaign = CAMPAIGN_TOWER_UNLOCKS[towerId] ?? CAMPAIGN_TOWER_UNLOCKS_ADDED[towerId];
   if (campaign) return `Clear Star ${campaign.star} · Stage ${campaign.stage}`;
-  const level = LEVEL_TOWER_UNLOCKS[towerId];
+  const level = LEVEL_TOWER_UNLOCKS[towerId] ?? LEVEL_TOWER_UNLOCKS_ADDED[towerId];
   return level ? `Reach Player Level ${level}` : 'Unlocked from the start';
 }
+
+export function towerGemUnlockCost(towerId: string): number { return GEM_TOWER_UNLOCKS[towerId] ?? 0; }

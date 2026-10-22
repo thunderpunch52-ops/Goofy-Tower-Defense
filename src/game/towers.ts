@@ -1,9 +1,11 @@
 export type TowerRarity = 'Common' | 'Rare' | 'Epic' | 'Legendary';
-export type TowerAttackType = 'single' | 'push' | 'splash' | 'sticky' | 'supportLaser' | 'trap' | 'chain' | 'burnAura' | 'beam' | 'freeze' | 'pierce' | 'teddy' | 'roomba';
+export type TowerAttackType = 'single' | 'push' | 'splash' | 'sticky' | 'supportLaser' | 'trap' | 'chain' | 'burnAura' | 'beam' | 'freeze' | 'pierce' | 'teddy' | 'roomba' | 'claw' | 'trafficLight' | 'fortress';
 export interface UpgradeTier { rank: number; name: string; cost: number; description: string }
 export interface TowerUpgradePath { name: string; tiers: UpgradeTier[] }
 export interface TowerSpec { id: string; name: string; rarity: TowerRarity; footprint: number; cost: number; role: string; damage: number; attackRate: number; range: number; attackType: TowerAttackType; color: number; paths: TowerUpgradePath[] }
-export const TOWERS = [
+import { ADDED_TOWERS } from './addedTowers';
+
+const ORIGINAL_TOWERS = [
   {
     "id": "lawnDartGnome",
     "name": "Lawn Dart Gnome",
@@ -2189,3 +2191,5 @@ export const TOWERS = [
     ]
   }
 ] as const satisfies readonly TowerSpec[];
+
+export const TOWERS = [...ORIGINAL_TOWERS, ...ADDED_TOWERS] as const satisfies readonly TowerSpec[];
