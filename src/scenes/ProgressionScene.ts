@@ -5,6 +5,8 @@ import { exportProgressCode, importProgressCode, initializeProgress, saveTowerMa
 
 const W = 1280;
 const C = { ink: '#17152f', panel: '#201e40', panel2: '#2b2856', cream: '#fff5d7', muted: '#c4c3e5', mint: '#75efc1', gold: '#ffd15e', pink: '#ff6d9e', blue: '#63dcff' };
+const RARITY_ORDER = ['Common', 'Rare', 'Epic', 'Legendary'] as const;
+const COLLECTION_TOWERS = [...TOWERS].sort((a, b) => RARITY_ORDER.indexOf(a.rarity) - RARITY_ORDER.indexOf(b.rarity));
 type Tab = 'mastery' | 'bestiary' | 'save';
 
 export class ProgressionScene extends Phaser.Scene {
@@ -157,7 +159,7 @@ export class ProgressionScene extends Phaser.Scene {
     this.towerCardContainer.setMask(maskShape.createGeometryMask());
     maskShape.setVisible(false);
     const visibleHeight = 480;
-    const rowCount = Math.ceil(TOWERS.length / 2);
+    const rowCount = Math.ceil(COLLECTION_TOWERS.length / 2);
     const contentHeight = 188 + rowCount * 66 - 180;
     this.towerScrollMax = Math.max(0, contentHeight - visibleHeight);
     const scrollTrack = this.add.rectangle(574, 420, 10, visibleHeight, 0x17152f).setStrokeStyle(1, 0x7775aa).setData('tab', 'mastery').setDepth(6);
@@ -183,7 +185,7 @@ export class ProgressionScene extends Phaser.Scene {
       const bottom = 660 - half;
       this.towerScrollThumb?.setY(top + this.towerScrollOffset / Math.max(1, this.towerScrollMax) * (bottom - top));
     });
-    TOWERS.forEach((tower, index) => {
+    COLLECTION_TOWERS.forEach((tower, index) => {
       const col = index % 2;
       const row = Math.floor(index / 2);
       const x = 65 + col * 260;
@@ -348,7 +350,7 @@ export class ProgressionScene extends Phaser.Scene {
   }
 
   private refreshTowerCards(): void {
-    TOWERS.forEach((tower, index) => {
+    COLLECTION_TOWERS.forEach((tower, index) => {
       const card = this.towerLabels[index];
       if (!card) return;
       const record = towerMastery(this.registry, tower.id);
