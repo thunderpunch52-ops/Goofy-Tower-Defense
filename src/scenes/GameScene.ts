@@ -3740,7 +3740,11 @@ export class GameScene extends Phaser.Scene {
   private applyUpgrade(tower: PlacedTower, pathIndex: number, upgrade: UpgradeTier): void {
     tower.acquiredUpgrades.push(upgrade);
     if (tower.spec.id === 'cardboardFortress' && pathIndex === 0 && upgrade.rank === 3) {
-      tower.passiveUpgradeTimers.set('cardboard-deploy', this.simTime);
+      const existingGuards = this.boxGuards.filter((guard) => guard.tower === tower && !guard.heavy).length;
+      for (let index = existingGuards; index < 4; index += 1) {
+        if (!this.spawnBoxGuard(tower)) break;
+      }
+      tower.passiveUpgradeTimers.set('cardboard-deploy', this.simTime + 0.5);
     }
     const text = upgrade.description.toLowerCase();
     if (tower.spec.id === 'hydraulicCarCrusher' && pathIndex === 2 && upgrade.rank === 2) tower.rangeMultiplier *= 1.05;
