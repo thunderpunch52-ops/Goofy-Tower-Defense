@@ -126,8 +126,8 @@ export class ProgressionScene extends Phaser.Scene {
     const nextPlayerLevelXp = xpToEnterLevel(playerLevel + 1);
     this.add.text(632, 155, 'PLAYER LEVEL MILESTONES', { fontFamily: 'Arial', fontSize: '14px', color: C.gold, fontStyle: 'bold', letterSpacing: 1 }).setData('tab', 'mastery');
     this.add.text(1208, 155, `LEVEL ${playerLevel} · ${playerLevelXp.toLocaleString()} / ${nextPlayerLevelXp.toLocaleString()} XP`, { fontFamily: 'Arial', fontSize: '12px', color: C.mint, fontStyle: 'bold', align: 'right' }).setOrigin(1, 0).setData('tab', 'mastery');
-    const milestoneLevels = [2, 5, 10, 15];
-    const milestoneRewards = ['ANVIL\nTRAPDOOR', 'DISCO\nTURRET', 'CAT LASER\nPOINTER', 'COSMIC\nROOMBA'];
+    const milestoneLevels = [2, 3, 5, 6, 10, 12, 15];
+    const milestoneRewards = ['ANVIL\nTRAPDOOR', 'SODA MACHINE\nMECH', 'DISCO\nTURRET', 'LASER OFFICE\nPRINTER', 'CAT LASER\nPOINTER', 'SENTIENT\nTRAFFIC LIGHT', 'COSMIC\nROOMBA'];
     const trackStart = 650;
     const trackEnd = 1150;
     const trackY = 191;
@@ -144,7 +144,8 @@ export class ProgressionScene extends Phaser.Scene {
       milestones.fillStyle(complete ? 0x75efc1 : upcoming ? 0xffd15e : 0x35336b, 1)
         .lineStyle(2, complete ? 0xb8ffe0 : upcoming ? 0xffe39c : 0x7775aa, 1)
         .fillCircle(x, trackY, 9).strokeCircle(x, trackY, 9);
-      this.add.text(x, 205, `LEVEL ${level}\n${milestoneRewards[index]}`, { fontFamily: 'Arial', fontSize: '10px', color: complete ? C.mint : C.cream, fontStyle: 'bold', align: 'center', lineSpacing: 1, wordWrap: { width: 112 } }).setOrigin(0.5, 0).setData('tab', 'mastery');
+      const labelY = index % 2 === 0 ? 205 : 235;
+      this.add.text(x, labelY, `LEVEL ${level}\n${milestoneRewards[index]}`, { fontFamily: 'Arial', fontSize: '9px', color: complete ? C.mint : C.cream, fontStyle: 'bold', align: 'center', lineSpacing: 1, wordWrap: { width: 76 } }).setOrigin(0.5, 0).setData('tab', 'mastery');
     });
     milestones.fillStyle(0xffd15e, 1).fillCircle(progressPosition, trackY, 4);
     this.towerCardContainer = this.add.container(0, 0).setData('tab', 'mastery').setDepth(5);
