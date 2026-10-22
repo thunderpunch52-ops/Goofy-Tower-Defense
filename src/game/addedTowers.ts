@@ -14,14 +14,14 @@ const trafficCosts = [250, 380, 750, 1000, 1850, 2450, 7350];
 
 export const ADDED_TOWERS: readonly TowerSpec[] = [
   {
-    id: 'cardboardFortress', name: 'Cardboard Fortress', rarity: 'Legendary', footprint: 2, cost: 3100,
+    id: 'cardboardFortress', name: 'Cardboard Fortress', rarity: 'Legendary', footprint: 4, cost: 3100,
     role: 'Base Support · Hybrid at combat-unit unlocks', damage: 0, attackRate: 0, range: 14, attackType: 'fortress', color: 0xc99155,
     paths: [
       path('Box Infantry', [
-        ['Reinforced Tape', '+5% summon health.'], ['Recycled Strength', '+10% summon attack damage once attacks unlock.'],
-        ['Cardboard Grunts', 'Deploy up to 4 stationary 1x1 melee route blockers; each attacks the first contacting enemy for 25 damage once per second.'],
+        ['Reinforced Tape', '+5% summon health. Box Guards and Grunts march from the exit toward enemies, then hold position 3 route tiles ahead to intercept them.'], ['Recycled Strength', '+10% summon attack damage once attacks unlock.'],
+        ['Cardboard Grunts', 'Deploy up to 4 cardboard grunts that march from the exit toward enemies, then hold 3 route tiles ahead; each attacks the first contacting enemy for 25 damage once per second.'],
         ['Sharp Flaps', 'Slashes apply 5 physical damage per second for 3 seconds; same-source bleed refreshes and does not stack.'],
-        ['Box Battalion', 'Increase the limit to 8. Summons gain +50% movement speed if a future effect permits movement.'],
+        ['Box Battalion', 'Increase the limit to 8. Moving Box Guards and Grunts gain +50% march speed.'],
         ['Armored Cartons', 'Summons gain +3 flat Armor.'],
         ['Infinite Corrugated Army', 'For 25 seconds, deploy one 180-HP Heavy Grunt every 2.5 seconds, up to 12; each deals 35 damage per second. They despawn after the effect. Cooldown: 130 seconds.'],
       ], cardboardCosts),
@@ -42,7 +42,7 @@ export const ADDED_TOWERS: readonly TowerSpec[] = [
     ],
   },
   {
-    id: 'sodaMachineMech', name: 'Soda Machine Mech', rarity: 'Rare', footprint: 1, cost: 1000,
+    id: 'sodaMachineMech', name: 'Soda Machine Mech', rarity: 'Rare', footprint: 2, cost: 1000,
     role: 'Single-target impact damage · coin support', damage: 110, attackRate: 0.5, range: 12, attackType: 'single', color: 0x4fc8df,
     paths: [
       path('Carbonated Payload', [
@@ -63,7 +63,7 @@ export const ADDED_TOWERS: readonly TowerSpec[] = [
     ],
   },
   {
-    id: 'laserOfficePrinter', name: 'Laser Office Printer', rarity: 'Epic', footprint: 1, cost: 1800,
+    id: 'laserOfficePrinter', name: 'Laser Office Printer', rarity: 'Epic', footprint: 2, cost: 1800,
     role: 'Piercing line damage', damage: 75, attackRate: 1, range: 18, attackType: 'pierce', color: 0xff5368,
     paths: [
       path('Paper Jam', [
@@ -84,7 +84,7 @@ export const ADDED_TOWERS: readonly TowerSpec[] = [
     ],
   },
   {
-    id: 'arcadeClawMachine', name: 'Arcade Claw Machine', rarity: 'Epic', footprint: 2, cost: 2100,
+    id: 'arcadeClawMachine', name: 'Arcade Claw Machine', rarity: 'Epic', footprint: 4, cost: 2100,
     role: 'Target relocation and grab utility', damage: 90, attackRate: 0.4, range: 14, attackType: 'claw', color: 0x9b67e8,
     paths: [
       path('Heavy Claw', [
@@ -107,7 +107,7 @@ export const ADDED_TOWERS: readonly TowerSpec[] = [
     ],
   },
   {
-    id: 'sentientMicrowaveOven', name: 'Sentient Microwave Oven', rarity: 'Legendary', footprint: 2, cost: 3300,
+    id: 'sentientMicrowaveOven', name: 'Sentient Microwave Oven', rarity: 'Legendary', footprint: 4, cost: 3300,
     role: 'Area thermal damage over time', damage: 140, attackRate: 1.5, range: 10, attackType: 'burnAura', color: 0xff843d,
     paths: [
       path('Nuclear Meltdown', [
@@ -128,7 +128,7 @@ export const ADDED_TOWERS: readonly TowerSpec[] = [
     ],
   },
   {
-    id: 'hydraulicCarCrusher', name: 'Hydraulic Car Crusher', rarity: 'Legendary', footprint: 2, cost: 3400,
+    id: 'hydraulicCarCrusher', name: 'Hydraulic Car Crusher', rarity: 'Legendary', footprint: 4, cost: 3400,
     role: 'Area physical crushing', damage: 500, attackRate: 1 / 6.5, range: 3.5, attackType: 'teddy', color: 0xe75f55,
     paths: [
       path('Absolute Demolition', [
@@ -150,7 +150,7 @@ export const ADDED_TOWERS: readonly TowerSpec[] = [
     ],
   },
   {
-    id: 'sentientTrafficLight', name: 'Sentient Traffic Light', rarity: 'Legendary', footprint: 1, cost: 3100,
+    id: 'sentientTrafficLight', name: 'Sentient Traffic Light', rarity: 'Legendary', footprint: 2, cost: 3100,
     role: 'Cycling aura support · damage · control', damage: 15, attackRate: 1, range: 10, attackType: 'trafficLight', color: 0x57d987,
     paths: [
       path('Red Light', [
