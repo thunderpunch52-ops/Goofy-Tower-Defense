@@ -18,12 +18,12 @@ export const ADDED_TOWERS: readonly TowerSpec[] = [
     role: 'Base Support · Hybrid at combat-unit unlocks', damage: 0, attackRate: 0, range: 14, attackType: 'fortress', color: 0xc99155,
     paths: [
       path('Box Infantry', [
-        ['Reinforced Tape', '+5% summon health. Box Guards and Grunts march from the exit toward enemies, then hold position 3 route tiles ahead to intercept them.'], ['Recycled Strength', '+10% summon attack damage once attacks unlock.'],
-        ['Cardboard Grunts', 'Deploy up to 4 cardboard grunts that march from the exit toward enemies, then hold 3 route tiles ahead; each attacks the first contacting enemy for 25 damage once per second.'],
+        ['Reinforced Tape', '+5% summon health. Box Guards and Grunts march from the exit toward the entrance, then hold 3 route tiles ahead of the nearest enemy.'], ['Recycled Strength', '+10% summon attack damage once attacks unlock.'],
+        ['Cardboard Grunts', 'Deploy up to 4 visible, HP-tracked Grunts that march from the exit toward the entrance and hold 3 route tiles ahead of enemies. Each attacks for 25 physical damage per second. On enemy contact, it deals its remaining HP as collision damage and loses HP equal to the enemy’s remaining HP, reduced by its Armor.'],
         ['Sharp Flaps', 'Slashes apply 5 physical damage per second for 3 seconds; same-source bleed refreshes and does not stack.'],
         ['Box Battalion', 'Increase the limit to 8. Moving Box Guards and Grunts gain +50% march speed.'],
         ['Armored Cartons', 'Summons gain +3 flat Armor.'],
-        ['Infinite Corrugated Army', 'For 25 seconds, deploy one 180-HP Heavy Grunt every 2.5 seconds, up to 12; each deals 35 damage per second. They despawn after the effect. Cooldown: 130 seconds.'],
+        ['Infinite Corrugated Army', 'For 25 seconds, deploy one visible, 180-HP Heavy Grunt every 2.5 seconds, up to 12. They march from exit toward entrance, deal 35 physical damage per second, and trade remaining HP on enemy contact. They despawn after the effect. Cooldown: 130 seconds.'],
       ], cardboardCosts),
       path('Delivery Drones', [
         ['Light Packaging', '+5% drone range.'], ['Air Mail', '+10% drone attack speed.'],

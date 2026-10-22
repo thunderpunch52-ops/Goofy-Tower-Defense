@@ -63,7 +63,7 @@ interface TrackSpike { progress: number; route: Tile[]; expiresAt: number; tickI
 interface TrackResidue { progress: number; route: Tile[]; expiresAt: number; tickIn: number; sprite: Phaser.GameObjects.Graphics; tower: PlacedTower; slow: number; burn: boolean; armorShred: boolean; hyperarmorShred: boolean; damageTaken: boolean; damagePerSecond: number; explode: boolean; trap: boolean; hitEnemyIds: Set<number> }
 interface MiniGnome { progress: number; route: Tile[]; speed: number; sprite: Phaser.GameObjects.Container; tower: PlacedTower }
 interface MiniRoomba { progress: number; route: Tile[]; direction: 1 | -1; speed: number; patrolMin: number; patrolMax: number; sweeper: boolean; hp: number; attackTimer: number; sprite: Phaser.GameObjects.Container; hpBar: Phaser.GameObjects.Rectangle; tower: PlacedTower }
-interface BoxGuard { progress: number; route: Tile[]; hp: number; maxHp: number; speed: number; stationed: boolean; attackTimer: number; contactTimers: Map<number, number>; sprite: Phaser.GameObjects.Container; tower: PlacedTower; heavy: boolean; despawnAt: number }
+interface BoxGuard { progress: number; route: Tile[]; hp: number; maxHp: number; armor: number; speed: number; stationed: boolean; attackTimer: number; contactTimers: Map<number, number>; sprite: Phaser.GameObjects.Container; hpBarBack: Phaser.GameObjects.Rectangle; hpBar: Phaser.GameObjects.Rectangle; tower: PlacedTower; heavy: boolean; despawnAt: number }
 interface BoxDrone { sprite: Phaser.GameObjects.Container; tower: PlacedTower; attackTimer: number; bombTimer: number; temporaryUntil: number }
 interface BoxTurret { tile: Tile; sprite: Phaser.GameObjects.Container; tower: PlacedTower; attackTimer: number; temporaryUntil: number }
 interface PendingImpact { enemyId: number; tower: PlacedTower; damage: number; singleTargetHit: boolean; dueAt: number }
@@ -268,7 +268,7 @@ export class GameScene extends Phaser.Scene {
     this.trackResidues.splice(0).forEach((residue) => residue.sprite.destroy());
     this.miniGnomes.splice(0).forEach((gnome) => gnome.sprite.destroy());
     this.miniRoombas.splice(0).forEach((roomba) => { roomba.sprite.destroy(); roomba.hpBar.destroy(); });
-    this.boxGuards.splice(0).forEach((guard) => guard.sprite.destroy());
+    this.boxGuards.splice(0).forEach((guard) => { guard.sprite.destroy(); guard.hpBar.destroy(); guard.hpBarBack.destroy(); });
     this.boxDrones.splice(0).forEach((drone) => drone.sprite.destroy());
     this.boxTurrets.splice(0).forEach((turret) => turret.sprite.destroy());
     this.soapPuddles.splice(0).forEach((puddle) => puddle.sprite.destroy());
@@ -1755,16 +1755,14 @@ export class GameScene extends Phaser.Scene {
   }
 
   private spawnBoxGuard(tower: PlacedTower, heavy = false): boolean {
-    const candidates = this.visualRoutes.flatMap((route) => route.map((tile, progress) => ({ route, tile, progress })))
-      .filter(({ tile, route }) => Math.hypot(this.towerGridCenter(tower).x - tile.x, this.towerGridCenter(tower).y - tile.y) <= 14
-        && !this.boxGuards.some((guard) => guard.route === route && Math.abs(guard.progress - route.indexOf(tile)) < 0.01));
-    candidates.sort((a, b) => {
-      const da = Math.hypot(this.towerGridCenter(tower).x - a.tile.x, this.towerGridCenter(tower).y - a.tile.y);
-      const db = Math.hypot(this.towerGridCenter(tower).x - b.tile.x, this.towerGridCenter(tower).y - b.tile.y);
-      return b.progress - a.progress || da - db;
-    });
-    const spot = candidates[0];
-    if (!spot) return false;
+    const center = this.towerGridCenter(tower);
+    const route = [...(this.visualRoutes.length ? this.visualRoutes : [this.route])]
+      .sort((a, b) => Math.hypot(center.x - a[a.length - 1]!.x, center.y - a[a.length - 1]!.y)
+        - Math.hypot(center.x - b[b.length - 1]!.x, center.y - b[b.length - 1]!.y))[0];
+    if (!route?.length) return false;
+    // Send reinforcements in a visible file from the exit toward the entrance.
+    const routeGuards = this.boxGuards.filter((guard) => guard.tower === tower && guard.route === route).length;
+    const progress = Math.max(0, route.length - 1 - routeGuards * 1.4);
     const healthMultiplier = 1 + (tower.acquiredUpgrades.some((upgrade) => upgrade.name === 'Reinforced Tape') ? 0.05 : 0);
     const maxHp = (heavy ? 180 : 120) * healthMultiplier;
     const shell = this.add.rectangle(0, 0, BOARD.cell * 1.7, BOARD.cell * 1.65, heavy ? 0xb96938 : 0xc99155, 1).setStrokeStyle(1.5, 0x402719, 1);
@@ -1781,11 +1779,14 @@ export class GameScene extends Phaser.Scene {
     if (heavy) art.lineStyle(1.3, 0xf4c86a, 0.95).strokeRect(-BOARD.cell * 0.55, -BOARD.cell * 0.45, BOARD.cell * 1.1, BOARD.cell * 0.9);
     const label = this.add.text(0, BOARD.cell * 0.57, heavy ? '★' : tower.ranks[0]! >= 3 ? 'GRUNT' : 'GUARD', { fontFamily: 'Arial', fontSize: heavy ? '7px' : '6px', color: '#fff5d7', fontStyle: 'bold', stroke: '#402719', strokeThickness: 1 }).setOrigin(0.5);
     const sprite = this.addToBoard(this.add.container(0, 0, [shell, art, label]).setDepth(8));
-    const position = this.positionOnRoute(spot.progress, spot.route);
+    const position = this.positionOnRoute(progress, route);
     sprite.setPosition(position.x, position.y);
-    this.boxGuards.push({ progress: spot.progress, route: spot.route, hp: maxHp, maxHp,
+    const barWidth = BOARD.cell * 1.65;
+    const hpBarBack = this.addToBoard(this.add.rectangle(position.x, position.y - BOARD.cell * 1.12, barWidth, Math.max(2, BOARD.cell * 0.18), 0x20252a, 0.95).setDepth(9));
+    const hpBar = this.addToBoard(this.add.rectangle(position.x - barWidth / 2, position.y - BOARD.cell * 1.12, barWidth, Math.max(2, BOARD.cell * 0.13), 0x7ce0a0, 1).setOrigin(0, 0.5).setDepth(10));
+    this.boxGuards.push({ progress, route, hp: maxHp, maxHp, armor: tower.ranks[0]! >= 6 ? 3 : 0,
       speed: 3 * (tower.ranks[0]! >= 5 ? 1.5 : 1), stationed: false,
-      attackTimer: 0, contactTimers: new Map(), sprite, tower, heavy, despawnAt: heavy ? this.simTime + 25 : Number.POSITIVE_INFINITY });
+      attackTimer: 0, contactTimers: new Map(), sprite, hpBarBack, hpBar, tower, heavy, despawnAt: heavy ? this.simTime + 25 : Number.POSITIVE_INFINITY });
     return true;
   }
 
@@ -1810,47 +1811,66 @@ export class GameScene extends Phaser.Scene {
     const guards = this.boxGuards.filter((guard) => guard.tower === tower);
     for (const guard of guards) {
       if (guard.heavy && this.simTime >= guard.despawnAt) {
-        guard.sprite.destroy(); this.boxGuards.splice(this.boxGuards.indexOf(guard), 1); continue;
+        guard.sprite.destroy(); guard.hpBar.destroy(); guard.hpBarBack.destroy(); this.boxGuards.splice(this.boxGuards.indexOf(guard), 1); continue;
       }
+      guard.speed = 3 * (tower.ranks[0]! >= 5 ? 1.5 : 1);
+      guard.armor = tower.ranks[0]! >= 6 ? 3 : 0;
+      for (const [enemyId, timer] of guard.contactTimers) guard.contactTimers.set(enemyId, Math.max(0, timer - dt));
+      const front = this.enemies.filter((enemy) => enemy.alive && !enemy.spec.boss && enemy.route === guard.route
+        && enemy.pathProgress <= guard.progress + 0.65).sort((a, b) => b.pathProgress - a.pathProgress)[0];
+      if (guard.stationed && (!front || guard.progress - front.pathProgress > 3.1)) guard.stationed = false;
       if (!guard.stationed) {
-        const front = this.enemies.filter((enemy) => enemy.alive && !enemy.spec.boss && enemy.route === guard.route)
-          .sort((a, b) => b.pathProgress - a.pathProgress)[0];
-        if (front) {
-          const stopAt = Math.max(0, front.pathProgress - 3);
-          if (guard.progress - stopAt <= 3) { guard.progress = stopAt; guard.stationed = true; }
-          else guard.progress = Math.max(stopAt, guard.progress - guard.speed * dt);
-          const at = this.positionOnRoute(guard.progress, guard.route);
-          guard.sprite.setPosition(at.x, at.y);
-        }
+        if (front && guard.progress - front.pathProgress <= 3) {
+          guard.progress = Math.min(guard.progress, front.pathProgress + 3);
+          guard.stationed = true;
+        } else guard.progress = Math.max(0, guard.progress - guard.speed * dt);
+      }
+      const at = this.positionOnRoute(guard.progress, guard.route);
+      guard.sprite.setPosition(at.x, at.y);
+      const barWidth = BOARD.cell * 1.65;
+      guard.hpBarBack.setPosition(at.x, at.y - BOARD.cell * 1.12);
+      guard.hpBar.setPosition(at.x - barWidth / 2, at.y - BOARD.cell * 1.12)
+        .setSize(barWidth * Math.max(0, guard.hp / guard.maxHp), Math.max(2, BOARD.cell * 0.13))
+        .setFillStyle(guard.hp / guard.maxHp <= 0.3 ? 0xef7e70 : guard.hp / guard.maxHp <= 0.6 ? 0xf4c86a : 0x7ce0a0);
+      if (!guard.heavy && guard.progress <= 0) {
+        guard.sprite.destroy(); guard.hpBar.destroy(); guard.hpBarBack.destroy(); this.boxGuards.splice(this.boxGuards.indexOf(guard), 1);
+        tower.passiveUpgradeTimers.set('cardboard-deploy', this.simTime + (tower.ranks[0]! >= 3 ? 0.5 : 4));
+        continue;
       }
       guard.attackTimer = Math.max(0, guard.attackTimer - dt);
       const contact = this.enemies.find((enemy) => enemy.alive && !enemy.spec.boss && enemy.route === guard.route && Math.abs(enemy.pathProgress - guard.progress) <= 0.65);
       if (!contact) continue;
+      const collisionTimer = guard.contactTimers.get(contact.id) ?? 0;
+      if (collisionTimer <= 0) {
+        const enemyHpAtImpact = contact.hp;
+        const summonHpAtImpact = guard.hp;
+        // Contact trades current HP: the cardboard unit deals its remaining HP
+        // as collision damage, then loses the enemy's remaining HP (minus its Armor).
+        this.damageEnemy(contact, tower, summonHpAtImpact, true, false, undefined, true);
+        guard.hp = Math.max(0, guard.hp - Math.max(1, enemyHpAtImpact - guard.armor));
+        guard.contactTimers.set(contact.id, 1);
+      }
+      if (guard.hp <= 0) {
+        guard.sprite.destroy(); guard.hpBar.destroy(); guard.hpBarBack.destroy(); this.boxGuards.splice(this.boxGuards.indexOf(guard), 1);
+        if (!guard.heavy) {
+          tower.passiveUpgradeTimers.set('cardboard-respawn', this.simTime + 3);
+          tower.passiveUpgradeTimers.set('cardboard-deploy', this.simTime + 3);
+        }
+        continue;
+      }
+      guard.hpBar.setSize(BOARD.cell * 1.65 * guard.hp / guard.maxHp, Math.max(2, BOARD.cell * 0.13))
+        .setFillStyle(guard.hp / guard.maxHp <= 0.3 ? 0xef7e70 : guard.hp / guard.maxHp <= 0.6 ? 0xf4c86a : 0x7ce0a0);
+      if (!contact.alive) continue;
       if (guard.heavy || tower.ranks[0]! >= 3) {
         if (guard.attackTimer <= 0) {
           const strength = guard.heavy ? 35 : 25;
           this.damageEnemy(contact, tower, strength * (tower.acquiredUpgrades.some((upgrade) => upgrade.name === 'Recycled Strength') ? 1.1 : 1), true);
-          if (!guard.heavy && tower.ranks[0]! >= 4) {
+          if (tower.ranks[0]! >= 4) {
             contact.burnSource = tower; contact.burnDps = Math.max(contact.burnDps, 5); contact.burnUntil = Math.max(contact.burnUntil, this.simTime + 3);
           }
           guard.attackTimer = 1;
         }
       }
-      let hitTimer = guard.contactTimers.get(contact.id) ?? 0;
-      hitTimer -= dt;
-      if (hitTimer <= 0) {
-        guard.hp -= Math.max(1, starScaledLeak(contact.spec.leak, this.star) - (tower.ranks[0]! >= 6 ? 3 : 0));
-        hitTimer = 1;
-        if (guard.hp <= 0) {
-          guard.sprite.destroy(); this.boxGuards.splice(this.boxGuards.indexOf(guard), 1);
-          if (!guard.heavy) {
-            tower.passiveUpgradeTimers.set('cardboard-respawn', this.simTime + 3);
-            tower.passiveUpgradeTimers.set('cardboard-deploy', this.simTime + 3);
-          }
-          continue;
-        }
-      }
-      guard.contactTimers.set(contact.id, hitTimer);
     }
     const normal = this.boxGuards.filter((guard) => guard.tower === tower && !guard.heavy).length;
     const desired = tower.ranks[0]! >= 5 ? 8 : tower.ranks[0]! >= 3 ? 4 : 1;
@@ -3739,6 +3759,13 @@ export class GameScene extends Phaser.Scene {
 
   private applyUpgrade(tower: PlacedTower, pathIndex: number, upgrade: UpgradeTier): void {
     tower.acquiredUpgrades.push(upgrade);
+    if (tower.spec.id === 'cardboardFortress' && pathIndex === 0 && upgrade.rank === 1) {
+      for (const guard of this.boxGuards.filter((unit) => unit.tower === tower)) {
+        const bonusHp = guard.maxHp * 0.05;
+        guard.maxHp += bonusHp;
+        guard.hp += bonusHp;
+      }
+    }
     if (tower.spec.id === 'cardboardFortress' && pathIndex === 0 && upgrade.rank === 3) {
       const existingGuards = this.boxGuards.filter((guard) => guard.tower === tower && !guard.heavy).length;
       for (let index = existingGuards; index < 4; index += 1) {
