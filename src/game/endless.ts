@@ -1,6 +1,94 @@
-import { type EnemyKey, type WaveGroup } from './content';
+import { type EnemyKey, type EnemySpec, type WaveGroup } from './content';
 
 export type EndlessThreat = 'Basic' | 'Fast' | 'Heavy' | 'Unique' | 'Mini-Boss' | 'Boss';
+export type EndlessEliteId = 'midas' | 'hermes' | 'iron' | 'phantom' | 'siphon' | 'brute' | 'nullField' | 'splitEcho';
+export const ENDLESS_MEGA_BOSS_COST = 800;
+
+export interface EndlessEliteSpec {
+  id: EndlessEliteId;
+  name: string;
+  color: number;
+  points: number;
+  description: string;
+}
+
+export const ENDLESS_ELITES: EndlessEliteSpec[] = [
+  { id: 'midas', name: 'Touched by Midas', color: 0xffd22e, points: 60, description: '+50% HP, +25% Armor, drops 3× bounty.' },
+  { id: 'hermes', name: 'Blessed by Hermes', color: 0x25efff, points: 75, description: '−25% HP, 2× speed, ignores first slow or stun.' },
+  { id: 'iron', name: 'Forged in Iron', color: 0xa9b2ba, points: 120, description: '+100% HP, +5 Armor, +20 Hyperarmor; shields nearby non-elites.' },
+  { id: 'phantom', name: 'Phantom-Stitched', color: 0xb85cff, points: 80, description: 'Every 4s jumps 2 tiles forward and sheds damage-over-time.' },
+  { id: 'siphon', name: 'Siphon-Cursed', color: 0xff36cf, points: 90, description: '+25% HP; hits slow the attacking tower for 1s.' },
+  { id: 'brute', name: 'Blood-Pact Brute', color: 0xf04452, points: 110, description: '+50% HP; each 25% HP lost adds speed and leak damage.' },
+  { id: 'nullField', name: 'Null-Field Conduit', color: 0xeaff28, points: 100, description: '+10 Hyperarmor; immune to stun, freeze, and knockback.' },
+  { id: 'splitEcho', name: 'Split-Echo Entity', color: 0x22e58e, points: 130, description: '+75% HP; below half HP spawns a 1-HP echo.' },
+];
+
+export function endlessEliteSpec(id: EndlessEliteId): EndlessEliteSpec {
+  return ENDLESS_ELITES.find((elite) => elite.id === id)!;
+}
+
+export function endlessElitePoints(ids: EndlessEliteId[]): number {
+  return ids.reduce((total, id) => total + endlessEliteSpec(id).points, 0);
+}
+
+export interface EndlessEliteStats {
+  hpMultiplier: number;
+  speedMultiplier: number;
+  armor: number;
+  hyperarmor: number;
+  bountyMultiplier: number;
+}
+
+/** Stacks each purchased trait on one queued enemy without losing base stats. */
+export function endlessEliteStats(base: Pick<EnemySpec, 'armor' | 'hyperarmor'>, ids: EndlessEliteId[]): EndlessEliteStats {
+  const count = (id: EndlessEliteId) => ids.filter((elite) => elite === id).length;
+  return {
+    hpMultiplier: 1.5 ** count('midas') * 0.75 ** count('hermes') * 2 ** count('iron')
+      * 1.25 ** count('siphon') * 1.5 ** count('brute') * 1.75 ** count('splitEcho'),
+    speedMultiplier: 2 ** count('hermes'),
+    armor: base.armor * 1.25 ** count('midas') + 5 * count('iron'),
+    hyperarmor: base.hyperarmor + 20 * count('iron') + 10 * count('nullField'),
+    bountyMultiplier: 3 ** count('midas'),
+  };
+}
+
+export function endlessBloodPactStages(hp: number, maxHp: number): number {
+  return maxHp > 0 ? Math.max(0, Math.min(4, Math.floor((1 - hp / maxHp) * 4 + 1e-8))) : 0;
+}
+
+export function endlessHermesCrowdControlCharges(ids: EndlessEliteId[]): number { return ids.filter((id) => id === 'hermes').length; }
+export function endlessSiphonSlowPerHit(ids: EndlessEliteId[]): number { return Math.min(0.8, ids.filter((id) => id === 'siphon').length * 0.2); }
+
+export function endlessMegaBossPhase(hpRatio: number): 1 | 2 | 3 {
+  return hpRatio <= 0.33 ? 3 : hpRatio <= 0.66 ? 2 : 1;
+}
+
+/** Keeps one attack from skipping an entire mega-boss phase transition. */
+export function endlessMegaBossDamageLimit(hp: number, maxHp: number, phase: 1 | 2 | 3, damage: number): number {
+  const threshold = phase === 1 ? 0.66 : phase === 2 ? 0.33 : 0;
+  if (threshold === 0 || maxHp <= 0) return damage;
+  const boundaryHp = Math.floor(maxHp * threshold);
+  return Math.min(damage, Math.max(0, hp - boundaryHp));
+}
+
+export function endlessMegaBossShield(maxHp: number): number { return Math.floor(Math.max(0, maxHp) * 0.1); }
+
+export function endlessWaveEnemyBudget(wave: number): number {
+  // Keep the regular roster compact so the first Endless wave can afford its
+  // cheapest selectable elite; both sides still draw from the same total pool.
+  // Reserve most of the wave's shared point pool for player-purchased elites and
+  // mega bosses; ordinary enemies and upgrades still share one total budget.
+  return Math.floor(endlessWaveBudget(wave) * 0.4);
+}
+
+export function endlessEnemyRosterCost(groups: WaveGroup[]): number {
+  return groups.reduce((total, group) => total + endlessEnemyPointCost(group.enemy) * group.count, 0);
+}
+
+export function endlessEnemyPointCost(enemy: EnemyKey): number {
+  return enemy === 'doomsdayClockworkGoliath' || enemy === 'abyssalJunkHydra'
+    ? 800 : ENEMY_POINTS[endlessThreatForEnemy(enemy)].points;
+}
 
 const ENEMY_POINTS: Record<EndlessThreat, { points: number; enemies: EnemyKey[] }> = {
   Basic: { points: 5, enemies: ['sock', 'donut', 'box', 'bowling'] },
@@ -39,8 +127,7 @@ export function endlessBountyMultiplier(wave: number): number {
 }
 
 /** Stable, bounded composition builder that respects per-type and milestone caps. */
-export function generateEndlessWave(wave: number, random: () => number = Math.random): WaveGroup[] {
-  const budget = endlessWaveBudget(wave);
+export function generateEndlessWave(wave: number, random: () => number = Math.random, budget = endlessWaveBudget(wave)): WaveGroup[] {
   const milestone = wave >= 20 && wave % 5 === 0;
   const counts = new Map<EnemyKey, number>();
   let spent = 0;

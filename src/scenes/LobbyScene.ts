@@ -40,7 +40,7 @@ export class LobbyScene extends Phaser.Scene {
     };
     openProgression(466, 'TOWER MASTERY', 'mastery');
     openProgression(520, 'BESTIARY & SAVE CODE', 'bestiary');
-    this.add.text(62, 594, 'GOOFY DEFENSE  •  1.2.8', { fontFamily: 'Arial', fontSize: '13px', color: C.muted, lineSpacing: 7 });
+    this.add.text(62, 594, 'GOOFY DEFENSE  •  2.0.0', { fontFamily: 'Arial', fontSize: '13px', color: C.muted, lineSpacing: 7 });
 
     this.add.text(W / 2, 88, 'THE GREAT SNACK DEFENSE', { fontFamily: 'Trebuchet MS', fontSize: '17px', color: C.mint, fontStyle: 'bold', letterSpacing: 3 }).setOrigin(0.5);
     this.add.text(W / 2, 165, 'Save the snacks!', { fontFamily: 'Trebuchet MS', fontSize: '44px', color: C.cream, fontStyle: 'bold', stroke: '#ff6d9e', strokeThickness: 2, shadow: { offsetX: 0, offsetY: 3, color: '#0c0a20', blur: 5, fill: true } }).setOrigin(0.5);

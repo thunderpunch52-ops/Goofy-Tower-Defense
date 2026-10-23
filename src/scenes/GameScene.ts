@@ -2,7 +2,7 @@ import Phaser from 'phaser';
 import { ENEMIES, STAGE_ONE_WAVES, WAVE_EVENT_NAMES, normalizeStar, starScaledBounty, starScaledHp, starScaledLeak, waveClearPayout, type EnemyKey, type EnemySpec, type WaveGroup } from '../game/content';
 import { BOARD_COLUMNS, BOARD_ROWS, CAMPAIGN_MAPS, createMapRoute, getMap, getMapObstacles, MAPS, routeKey, widenRouteTiles, type MapId, type MapObstacle, type Tile } from '../game/map';
 import { TOWERS, type TowerSpec, type UpgradeTier } from '../game/towers';
-import { endlessBountyMultiplier, endlessHpMultiplier, endlessLeakDamage, endlessThreatForEnemy, generateEndlessWave, type EndlessThreat } from '../game/endless';
+import { ENDLESS_ELITES, ENDLESS_MEGA_BOSS_COST, endlessBloodPactStages, endlessBountyMultiplier, endlessEliteSpec, endlessEliteStats, endlessHermesCrowdControlCharges, endlessHpMultiplier, endlessLeakDamage, endlessEnemyPointCost, endlessEnemyRosterCost, endlessMegaBossDamageLimit, endlessMegaBossShield, endlessSiphonSlowPerHit, endlessThreatForEnemy, endlessWaveBudget, endlessWaveEnemyBudget, generateEndlessWave, type EndlessEliteId, type EndlessThreat } from '../game/endless';
 import { createRunSession } from '../state/runSession';
 import { grantPlayerXp, grantTowerXp, initializeProgress, towerMastery, towerUnlocked, unlockBestiaryEntry } from '../state/progression';
 
@@ -34,6 +34,8 @@ interface PlacedTower {
   acquiredUpgrades: UpgradeTier[]; shotCounter: number;
   passiveUpgradeTimers: Map<string, number>;
   criticalChance: number;
+  siphonSlowUntil: number; siphonSlowAmount: number;
+  shieldHp: number;
   disabledUntil: number;
   stunHitUntil: number;
   noSell: boolean;
@@ -42,6 +44,7 @@ interface PlacedTower {
 interface ActiveEnemy {
   id: number; spec: EnemySpec; pathProgress: number; route: Tile[]; hp: number; maxHp: number; sprite: Phaser.GameObjects.Arc; art: Phaser.GameObjects.Graphics;
   waveNumber: number; endlessThreat?: EndlessThreat;
+  elites: EndlessEliteId[]; eliteGlows: Phaser.GameObjects.Arc[]; megaShieldGlow?: Phaser.GameObjects.Arc; megaVortexGlow?: Phaser.GameObjects.Arc; megaPhase: 1 | 2 | 3; megaTransitionUntil: number; megaShieldHp: number; megaAbilityTimer: number; eliteEcho?: boolean; elitePhantomTimer: number; eliteEchoSpawned: boolean;
   hpBar: Phaser.GameObjects.Rectangle; label: Phaser.GameObjects.Text; alive: boolean;
   slowUntil: number; slowAmount: number; slowSource?: PlacedTower; reverseMomentumUntil: number;
   burnUntil: number; burnDps: number; burnTick: number; burnSource?: PlacedTower; stunUntil: number;
@@ -68,6 +71,7 @@ interface BoxDrone { sprite: Phaser.GameObjects.Container; hpBarBack: Phaser.Gam
 interface BoxTurret { tile: Tile; route: Tile[]; progress: number; sprite?: Phaser.GameObjects.Container; hpBarBack?: Phaser.GameObjects.Rectangle; hpBar?: Phaser.GameObjects.Rectangle; statsLabel?: Phaser.GameObjects.Text; hp: number; maxHp: number; armor: number; hyperarmor: number; attackTimer: number; contactTimers: Map<number, number>; rebuildAt: number; tower: PlacedTower; temporaryUntil: number }
 interface PendingImpact { enemyId: number; tower: PlacedTower; damage: number; singleTargetHit: boolean; dueAt: number }
 interface RouteArrow { route: Tile[]; progress: number; elapsed: number; graphic: Phaser.GameObjects.Graphics }
+interface MegaHazard { route: Tile[]; progress: number; expiresAt: number; speedMultiplier: number; graphic: Phaser.GameObjects.Graphics }
 interface CampaignMutation { id: string; name: string; description: string; side: 'GOOD' | 'BAD' | 'HELL' | 'UNIQUE'; stackCap: number; stackable?: boolean }
 
 const CAMPAIGN_MUTATIONS: CampaignMutation[] = [
@@ -133,6 +137,7 @@ export class GameScene extends Phaser.Scene {
   private readonly boxTurrets: BoxTurret[] = [];
   private readonly pendingImpacts: PendingImpact[] = [];
   private readonly routeArrows: RouteArrow[] = [];
+  private readonly megaHazards: MegaHazard[] = [];
   private readonly towerObjects = new Map<string, PlacedTower>();
   private wave = 0;
   private star = 1;
@@ -151,6 +156,13 @@ export class GameScene extends Phaser.Scene {
   private betweenWaveTimer = 0;
   private lastWavePayout = 0;
   private waveGroups: WaveGroup[] = [];
+  private endlessAssignments = new Map<number, EndlessEliteId[]>();
+  private endlessBudgetRemaining = 0;
+  private endlessTargetIndex = 0;
+  private endlessSpawnedCount = 0;
+  private endlessPrepOpen = false;
+  private endlessReverseGearsUsed = false;
+  private endlessPrepObjects: Phaser.GameObjects.GameObject[] = [];
   private groupIndex = 0;
   private groupRemaining = 0;
   private groupDelayStarted = false;
@@ -284,6 +296,14 @@ export class GameScene extends Phaser.Scene {
     this.towerStunUntil = 0;
     this.modifierChoiceOpen = false;
     this.modifierOverlayObjects.length = 0;
+    this.endlessPrepObjects.splice(0).forEach((object) => object.destroy());
+    this.endlessPrepOpen = false;
+    this.endlessAssignments.clear();
+    this.endlessBudgetRemaining = 0;
+    this.endlessTargetIndex = 0;
+    this.endlessSpawnedCount = 0;
+    this.endlessReverseGearsUsed = false;
+    this.megaHazards.splice(0).forEach((hazard) => hazard.graphic.destroy());
     this.mysteryBoxUsed = false;
     this.waveTotalHp = 0;
     this.waveEnemyCount = 0;
@@ -1180,6 +1200,7 @@ export class GameScene extends Phaser.Scene {
     this.skipCooldown = Math.max(0, this.skipCooldown - dt);
     this.stepPendingImpacts();
     if (this.phase === 'countdown') {
+      if (this.endlessPrepOpen) return;
       this.countdown -= dt;
       if (this.countdown <= 0) {
         this.phase = 'wave';
@@ -1234,10 +1255,21 @@ export class GameScene extends Phaser.Scene {
   }
 
   private beginWave(number: number): void {
+    this.megaHazards.splice(0).forEach((hazard) => hazard.graphic.destroy());
     this.wave = number;
     this.waveSpawnIndex = 0;
     this.run.wave = number;
-    this.waveGroups = number <= STAGE_ONE_WAVES.length ? STAGE_ONE_WAVES[number - 1]! : generateEndlessWave(number);
+    this.endlessAssignments.clear();
+    this.endlessSpawnedCount = 0;
+    this.endlessTargetIndex = 0;
+    if (this.endlessMode && number > STAGE_ONE_WAVES.length) {
+      const totalBudget = endlessWaveBudget(number);
+      this.waveGroups = generateEndlessWave(number, Math.random, endlessWaveEnemyBudget(number));
+      this.endlessBudgetRemaining = Math.max(0, totalBudget - endlessEnemyRosterCost(this.waveGroups));
+    } else {
+      this.waveGroups = number <= STAGE_ONE_WAVES.length ? STAGE_ONE_WAVES[number - 1]! : generateEndlessWave(number);
+      this.endlessBudgetRemaining = 0;
+    }
     this.groupIndex = 0;
     this.groupRemaining = 0;
     this.groupDelayStarted = false;
@@ -1256,6 +1288,102 @@ export class GameScene extends Phaser.Scene {
     const endlessModifierWave = this.endlessMode && this.endlessModifiersEnabled && number >= 5 && number % 5 === 0 && number % 20 !== 0;
     const stageFiveModifierWave = !this.endlessMode && !this.mapPreview && this.campaignStage === 5 && [5, 10, 15].includes(number);
     if (endlessModifierWave || stageFiveModifierWave) this.showModifierChoice();
+    else if (this.endlessMode && number > STAGE_ONE_WAVES.length) this.showEndlessPrep();
+  }
+
+  private endlessTarget(): { enemy: EnemyKey; localIndex: number; globalIndex: number } | undefined {
+    let remaining = this.endlessTargetIndex;
+    for (const group of this.waveGroups) {
+      if (remaining < group.count) return { enemy: group.enemy, localIndex: remaining, globalIndex: this.endlessTargetIndex };
+      remaining -= group.count;
+    }
+    return undefined;
+  }
+
+  private clearEndlessPrep(): void {
+    this.endlessPrepObjects.splice(0).forEach((object) => object.destroy());
+  }
+
+  private showEndlessPrep(): void {
+    this.endlessPrepOpen = true;
+    this.clearEndlessPrep();
+    const add = <T extends Phaser.GameObjects.GameObject & { setDepth(value: number): T }>(object: T): T => {
+      object.setDepth(50);
+      this.endlessPrepObjects.push(object);
+      return object;
+    };
+    const backdrop = add(this.add.rectangle(W / 2, H / 2, W, H, 0x080914, 0.9).setInteractive());
+    const panel = add(this.add.rectangle(W / 2, H / 2, 970, 640, 0x292750).setStrokeStyle(3, 0x63dcff));
+    add(this.add.text(W / 2, 70, `ENDLESS ELITE DEPLOYMENT · WAVE ${this.wave}`, { fontFamily: 'Arial', fontSize: '25px', color: '#fff5d7', fontStyle: 'bold', letterSpacing: 1 }).setOrigin(0.5));
+    add(this.add.text(W / 2, 104, `SHARED WAVE BUDGET · ${endlessWaveBudget(this.wave)} TOTAL · ${this.endlessBudgetRemaining} LEFT`, { fontFamily: 'Arial', fontSize: '15px', color: '#a9e7c2', fontStyle: 'bold' }).setOrigin(0.5));
+    const target = this.endlessTarget();
+    const assigned = target ? (this.endlessAssignments.get(target.globalIndex) ?? []) : [];
+    const unitLabel = add(this.add.text(W / 2, 144,
+      target ? `TARGET ${target.globalIndex + 1} / ${this.waveGroups.reduce((sum, group) => sum + group.count, 0)} · ${ENEMIES[target.enemy]!.name} · ELITES: ${assigned.map((id) => endlessEliteSpec(id).name).join(', ') || 'NONE'}` : 'No regular enemies remain in this wave.',
+      { fontFamily: 'Arial', fontSize: '13px', color: '#fff5d7', align: 'center', wordWrap: { width: 840 } }).setOrigin(0.5));
+    const remaining = add(this.add.text(W / 2, 170, `AVAILABLE POINTS: ${this.endlessBudgetRemaining}`, { fontFamily: 'Arial', fontSize: '18px', color: '#ffd15e', fontStyle: 'bold' }).setOrigin(0.5));
+    const navButton = (x: number, label: string, offset: number) => {
+      const button = add(this.add.rectangle(x, 144, 74, 28, 0x263b4a).setStrokeStyle(1, 0x63dcff).setInteractive({ useHandCursor: true }));
+      const text = add(this.add.text(x, 144, label, { fontFamily: 'Arial', fontSize: '11px', color: '#fff5d7', fontStyle: 'bold' }).setOrigin(0.5).setInteractive({ useHandCursor: true }));
+      const change = () => {
+        const total = this.waveGroups.reduce((sum, group) => sum + group.count, 0);
+        this.endlessTargetIndex = Math.max(0, Math.min(Math.max(0, total - 1), this.endlessTargetIndex + offset));
+        this.showEndlessPrep();
+      };
+      button.on('pointerdown', change); text.on('pointerdown', change);
+    };
+    navButton(184, '‹ ENEMY', -1); navButton(1096, 'ENEMY ›', 1);
+    const cardW = 426; const cardH = 88;
+    ENDLESS_ELITES.forEach((elite, index) => {
+      const column = index % 2; const row = Math.floor(index / 2);
+      const x = 420 + column * 440; const y = 242 + row * 95;
+      const canBuy = Boolean(target && this.endlessBudgetRemaining >= elite.points);
+      const card = add(this.add.rectangle(x, y, cardW, cardH, canBuy ? 0x202c46 : 0x201e40).setStrokeStyle(2, elite.color, canBuy ? 0.95 : 0.45).setInteractive({ useHandCursor: canBuy }));
+      const title = add(this.add.text(x - 198, y - 27, `${elite.name.toUpperCase()}  ·  ${elite.points} PTS`, { fontFamily: 'Arial', fontSize: '13px', color: `#${elite.color.toString(16).padStart(6, '0')}`, fontStyle: 'bold' }));
+      const description = add(this.add.text(x - 198, y - 4, elite.description, { fontFamily: 'Arial', fontSize: '11px', color: '#e5e2f4', wordWrap: { width: 305 } }));
+      const buy = add(this.add.text(x + 153, y + 24, `BUY ×${elite.points}`, { fontFamily: 'Arial', fontSize: '12px', color: canBuy ? '#a9e7c2' : '#8887a2', fontStyle: 'bold' }).setOrigin(0.5).setInteractive({ useHandCursor: canBuy }));
+      const purchase = () => {
+        if (!target || this.endlessBudgetRemaining < elite.points) return;
+        this.endlessBudgetRemaining -= elite.points;
+        const loadout = this.endlessAssignments.get(target.globalIndex) ?? [];
+        loadout.push(elite.id);
+        this.endlessAssignments.set(target.globalIndex, loadout);
+        this.showEndlessPrep();
+      };
+      card.on('pointerdown', purchase); buy.on('pointerdown', purchase); title.setInteractive({ useHandCursor: canBuy }).on('pointerdown', purchase); description.setInteractive({ useHandCursor: canBuy }).on('pointerdown', purchase);
+    });
+    const megaBosses: Array<{ enemy: EnemyKey; title: string; detail: string; color: number }> = [
+      { enemy: 'doomsdayClockworkGoliath', title: 'DOOMSDAY CLOCKWORK GOLIATH', detail: '60,000 HP · brass clockwork titan · tower-disabling phases', color: 0xd2a448 },
+      { enemy: 'abyssalJunkHydra', title: 'ABYSSAL JUNK-HYDRA', detail: '75,000 HP · three scrap heads · shield, hazards, beam', color: 0x9d68ef },
+    ];
+    megaBosses.forEach((boss, index) => {
+      const x = 420 + index * 440; const y = 604;
+      const canBuy = this.endlessBudgetRemaining >= ENDLESS_MEGA_BOSS_COST;
+      const card = add(this.add.rectangle(x, y, 426, 55, canBuy ? 0x302b44 : 0x201e40).setStrokeStyle(2, boss.color, canBuy ? 1 : 0.45).setInteractive({ useHandCursor: canBuy }));
+      add(this.add.text(x - 200, y - 18, `${boss.title} · ${ENDLESS_MEGA_BOSS_COST} PTS`, { fontFamily: 'Arial', fontSize: '12px', color: `#${boss.color.toString(16).padStart(6, '0')}`, fontStyle: 'bold' }));
+      const detail = add(this.add.text(x - 200, y + 3, boss.detail, { fontFamily: 'Arial', fontSize: '10px', color: '#e5e2f4', wordWrap: { width: 310 } }));
+      const buy = add(this.add.text(x + 160, y + 12, 'ADD', { fontFamily: 'Arial', fontSize: '12px', color: canBuy ? '#a9e7c2' : '#8887a2', fontStyle: 'bold' }).setOrigin(0.5).setInteractive({ useHandCursor: canBuy }));
+      const purchase = () => {
+        if (this.endlessBudgetRemaining < ENDLESS_MEGA_BOSS_COST) return;
+        const targetIndex = this.waveGroups.reduce((sum, group) => sum + group.count, 0);
+        this.endlessBudgetRemaining -= endlessEnemyPointCost(boss.enemy);
+        this.waveGroups.push({ enemy: boss.enemy, count: 1 });
+        this.endlessTargetIndex = targetIndex;
+        this.showEndlessPrep();
+      };
+      card.on('pointerdown', purchase); buy.on('pointerdown', purchase); detail.setInteractive({ useHandCursor: canBuy }).on('pointerdown', purchase);
+    });
+    const start = add(this.add.rectangle(W / 2, 662, 300, 34, 0x31584d).setStrokeStyle(2, 0xa9e7c2).setInteractive({ useHandCursor: true }));
+    const startLabel = add(this.add.text(W / 2, 662, 'START WAVE', { fontFamily: 'Arial', fontSize: '14px', color: '#ffffff', fontStyle: 'bold', letterSpacing: 1 }).setOrigin(0.5).setInteractive({ useHandCursor: true }));
+    const begin = () => {
+      this.clearEndlessPrep(); this.endlessPrepOpen = false;
+      this.countdown = 2;
+      this.gridFeedback = 'ELITES LOCKED IN · WAVE STARTING';
+    };
+    start.on('pointerdown', begin); startLabel.on('pointerdown', begin);
+    // Keep the key HUD labels above the modal for accessible point feedback.
+    remaining.setText(`AVAILABLE POINTS: ${this.endlessBudgetRemaining}`);
+    void backdrop; void panel; void unitLabel;
   }
 
   private stepSpawning(dt: number): void {
@@ -1288,36 +1416,55 @@ export class GameScene extends Phaser.Scene {
       this.groupIndex += 1;
     }
     const group = this.waveGroups[this.groupIndex - 1]!;
-    this.createEnemy(group.enemy, 0);
+    const eliteLoadout = this.endlessAssignments.get(this.endlessSpawnedCount) ?? [];
+    this.endlessSpawnedCount += 1;
+    this.createEnemy(group.enemy, 0, undefined, eliteLoadout);
     this.groupRemaining -= 1;
     const spec = ENEMIES[group.enemy]!;
     this.spawnTimer = this.groupRemaining > 0 ? Math.max(spec.miniboss ? 5 : 0, this.spawnDelayFor(spec)) : 0;
   }
 
-  private createEnemy(enemyKey: EnemyKey, pathProgress: number, inheritedRoute?: Tile[]): ActiveEnemy {
+  private createEnemy(enemyKey: EnemyKey, pathProgress: number, inheritedRoute?: Tile[], elites: EndlessEliteId[] = [], eliteEcho = false): ActiveEnemy {
     const baseSpec = ENEMIES[enemyKey]!;
     const endlessThreat = endlessThreatForEnemy(enemyKey);
-    const spec = this.endlessMode && this.wave > 15
+    let spec: EnemySpec = this.endlessMode && this.wave > 15
       ? { ...baseSpec, hp: Math.floor(baseSpec.hp * endlessHpMultiplier(this.wave)), leak: endlessLeakDamage(baseSpec.leak, this.wave, endlessThreat) }
       : baseSpec;
+    if (eliteEcho) spec = { ...spec, hp: 1, bounty: 0, color: 0x22e58e };
+    const eliteStats = endlessEliteStats(baseSpec, elites);
+    spec = { ...spec, hp: Math.max(1, Math.floor(spec.hp * eliteStats.hpMultiplier)),
+      speed: spec.speed * eliteStats.speedMultiplier,
+      armor: eliteStats.armor,
+      hyperarmor: eliteStats.hyperarmor,
+      color: elites.length ? endlessEliteSpec(elites[elites.length - 1]!).color : spec.color,
+    };
     const titanMultiplier = this.mutationStack('titanBlood') > 0 ? 1.5 : 1;
-    const hp = Math.floor(starScaledHp(spec.hp, this.star) * titanMultiplier);
+    const hp = eliteEcho ? 1 : Math.floor(starScaledHp(spec.hp, this.star) * titanMultiplier);
     const route = inheritedRoute ?? this.routeForNextEnemy();
     const start = this.positionOnRoute(pathProgress, route);
     // Phaser's circle API takes a radius. The old scale used almost one whole
     // tile as the radius, so each enemy occupied nearly two tiles and crowded
     // out its neighbors on the newly widened roads.
-    const size = (spec.boss ? 11 : spec.miniboss ? 9 : hp > 500 ? 8 : hp > 250 ? 7.5 : 6.2) * BOARD.cell / 13.6;
-    const sprite = this.addToBoard(this.add.circle(start.x, start.y, size, spec.color, 1).setStrokeStyle(2, 0x101820, 1).setDepth(4));
+    const megaBoss = spec.id === 'doomsdayClockworkGoliath' || spec.id === 'abyssalJunkHydra';
+    const size = (megaBoss ? 27.2 : spec.boss ? 11 : spec.miniboss ? 9 : hp > 500 ? 8 : hp > 250 ? 7.5 : 6.2) * BOARD.cell / 13.6;
+    const sprite = this.addToBoard(this.add.circle(start.x, start.y, size, spec.color, 1).setStrokeStyle(2, elites.length || eliteEcho ? spec.color : 0x101820, 1).setDepth(4));
     const art = this.drawEnemyDesign(spec, size);
     art.setPosition(start.x, start.y);
+    const eliteGlows = (eliteEcho ? [0x22e58e] : elites.map((id) => endlessEliteSpec(id).color)).map((color, index) =>
+      this.addToBoard(this.add.circle(start.x, start.y, size + 2 + index * 1.5, color, 0.12).setStrokeStyle(1.5, color, 0.88).setDepth(3.6)));
+    const megaShieldGlow = spec.id === 'abyssalJunkHydra'
+      ? this.addToBoard(this.add.circle(start.x, start.y, size + 5, 0x55dfff, 0.12).setStrokeStyle(2, 0x7cecff, 0.95).setDepth(3.7).setVisible(false))
+      : undefined;
+    const megaVortexGlow = spec.id === 'abyssalJunkHydra'
+      ? this.addToBoard(this.add.circle(start.x, start.y, size + 10, 0x3de5ff, 0.06).setStrokeStyle(3, 0x3de5ff, 0.85).setDepth(3.65).setVisible(false))
+      : undefined;
     const hpBar = this.addToBoard(this.add.rectangle(start.x, start.y - size - 2.5, size * 2, 2.4, spec.boss ? 0xff6b78 : spec.miniboss ? 0xf4c86a : 0x7ce0a0).setOrigin(0.5).setDepth(4));
-    const marker = spec.boss ? 'B' : spec.miniboss ? 'M' : spec.shortName.slice(0, 1).toUpperCase();
+    const marker = eliteEcho ? 'E' : elites.length ? '✦' : spec.boss ? 'B' : spec.miniboss ? 'M' : spec.shortName.slice(0, 1).toUpperCase();
     const labelSize = (spec.boss ? 10 : spec.miniboss ? 9 : 7) * BOARD.cell / 13.6;
     const label = this.addToBoard(this.add.text(start.x, start.y, marker, { fontFamily: 'Arial', fontSize: `${labelSize}px`, color: '#101820', fontStyle: 'bold' }).setOrigin(0.5).setDepth(5));
     label.setVisible(false);
     const enemy: ActiveEnemy = {
-      id: this.nextEnemyId++, spec, pathProgress, route, hp, maxHp: hp, waveNumber: this.wave, endlessThreat, sprite, art, hpBar, label, alive: true,
+      id: this.nextEnemyId++, spec, pathProgress, route, hp, maxHp: hp, waveNumber: this.wave, endlessThreat, elites: eliteEcho ? [] : [...elites], eliteGlows, megaShieldGlow, megaVortexGlow, megaPhase: 1, megaTransitionUntil: 0, megaShieldHp: 0, megaAbilityTimer: this.simTime + (spec.id === 'doomsdayClockworkGoliath' ? 6 : 5), eliteEcho, elitePhantomTimer: this.simTime + 4, eliteEchoSpawned: false, sprite, art, hpBar, label, alive: true,
       slowUntil: 0, slowAmount: 0, reverseMomentumUntil: 0, burnUntil: 0, burnDps: 0, burnTick: 0, stunUntil: 0,
       freezeUntil: 0, unfreezeSlowPending: false, wetUntil: 0,
       ccImmuneUntil: 0, stunImmuneUntil: 0, pushImmuneUntil: 0, roombaPulledUntil: 0, speedBoostUntil: 0, suctionUntil: 0,
@@ -1358,9 +1505,20 @@ export class GameScene extends Phaser.Scene {
     this.stepTrackResidues(dt);
     this.stepMiniGnomes(dt);
     this.stepMiniRoombas(dt);
+    this.stepMegaHazards();
     for (const enemy of this.enemies) {
       if (!enemy.alive) continue;
       this.stepEnemyAbility(enemy, dt);
+      const phantomCount = this.eliteCount(enemy, 'phantom');
+      if (phantomCount > 0 && this.simTime >= enemy.elitePhantomTimer) {
+        enemy.elitePhantomTimer += 4;
+        enemy.pathProgress = Math.min(enemy.route.length - 0.01, enemy.pathProgress + 2 * phantomCount);
+        enemy.burnDps = 0; enemy.burnUntil = 0; enemy.burnTick = 0; enemy.burnSource = undefined;
+        enemy.guanoPoisonStacks = 0; enemy.guanoPoisonUntil = 0; enemy.guanoPoisonTick = 0;
+        const flash = this.addToBoard(this.add.circle(enemy.sprite.x, enemy.sprite.y, enemy.sprite.radius + 4, 0xb85cff, 0.55).setDepth(7));
+        this.tweens.add({ targets: flash, alpha: 0, scale: 1.8, duration: 250, onComplete: () => flash.destroy() });
+        this.positionEnemy(enemy);
+      }
       if (this.simTime <= enemy.burnUntil && enemy.burnDps > 0) {
         enemy.burnTick += dt;
         while (enemy.burnTick >= 1) {
@@ -1386,7 +1544,7 @@ export class GameScene extends Phaser.Scene {
         this.applySlow(enemy, 0.5, 4, enemy.unfreezeSlowSource);
         enemy.unfreezeSlowSource = undefined;
       } else if (this.simTime >= enemy.freezeUntil) enemy.freezeUntil = 0;
-      if (!enemy.alive || this.simTime < enemy.stunUntil) continue;
+      if (!enemy.alive || this.simTime < enemy.stunUntil || this.simTime < enemy.megaTransitionUntil) continue;
       const slowActive = this.simTime < enemy.slowUntil;
       if (!slowActive && enemy.slowAmount > 0) {
         if (this.mutationStack('reverseMomentum') > 0 && enemy.slowSource) enemy.reverseMomentumUntil = Math.max(enemy.reverseMomentumUntil, this.simTime + 1);
@@ -1394,8 +1552,12 @@ export class GameScene extends Phaser.Scene {
         enemy.slowSource = undefined;
       }
       const slow = slowActive ? enemy.slowAmount : 0;
+      const bloodStages = endlessBloodPactStages(enemy.hp, enemy.maxHp);
+      const bloodSpeed = 1 + bloodStages * 0.15 * this.eliteCount(enemy, 'brute');
       const speedBoost = (this.simTime < enemy.speedBoostUntil ? 0.5 : 0) + (this.simTime < enemy.reverseMomentumUntil ? 0.1 : 0);
-      const movement = enemy.spec.speed * (1 - slow) * (1 + speedBoost) * dt;
+      const hazardSpeed = this.megaHazards.filter((hazard) => hazard.route === enemy.route && this.simTime < hazard.expiresAt && Math.abs(hazard.progress - enemy.pathProgress) <= 1.5)
+        .reduce((multiplier, hazard) => multiplier * hazard.speedMultiplier, 1);
+      const movement = enemy.spec.speed * bloodSpeed * hazardSpeed * (1 - slow) * (1 + speedBoost) * dt;
       if (this.simTime < enemy.guanoSlipUntil) {
         // Guano can make an enemy stumble backward briefly, but the stumble is
         // bounded so a puddle near the route entrance can never trap it there.
@@ -1407,8 +1569,10 @@ export class GameScene extends Phaser.Scene {
       }
       enemy.pathProgress = Math.max(0, enemy.pathProgress);
       if (enemy.pathProgress >= enemy.route.length) {
-      const leakMultiplier = (this.mutationStack('breachCrisis') > 0 ? 2 : 1) * (this.mutationStack('glassCannons') > 0 ? 2 : 1);
-      this.baseHealth = Math.max(0, this.baseHealth - Math.floor(starScaledLeak(enemy.spec.leak, this.star) * leakMultiplier));
+        const bloodStages = endlessBloodPactStages(enemy.hp, enemy.maxHp);
+        const eliteLeak = enemy.spec.leak + bloodStages * 2 * this.eliteCount(enemy, 'brute');
+        const leakMultiplier = (this.mutationStack('breachCrisis') > 0 ? 2 : 1) * (this.mutationStack('glassCannons') > 0 ? 2 : 1);
+        this.baseHealth = Math.max(0, this.baseHealth - Math.floor(starScaledLeak(eliteLeak, this.star) * leakMultiplier));
       if (this.mutationStack('sharedMisery')) this.towerStunUntil = Math.max(this.towerStunUntil, this.simTime + 2);
         this.removeEnemy(enemy);
       } else this.positionEnemy(enemy);
@@ -1416,6 +1580,10 @@ export class GameScene extends Phaser.Scene {
   }
 
   private stepEnemyAbility(enemy: ActiveEnemy, dt: number): void {
+    if (enemy.spec.ability === 'doomsdayClockworkGoliath' || enemy.spec.ability === 'abyssalJunkHydra') {
+      this.stepMegaBoss(enemy);
+      return;
+    }
     const ability = enemy.spec.ability;
     if (this.simTime < enemy.abilitySlowUntil) enemy.abilityTimer += dt * enemy.abilitySlowAmount;
     if (!ability || this.simTime < enemy.abilityTimer) return;
@@ -1430,6 +1598,154 @@ export class GameScene extends Phaser.Scene {
         if (target && Phaser.Math.Distance.Between(target.sprite.x, target.sprite.y, enemy.sprite.x, enemy.sprite.y) <= 6 * BOARD.cell) impact.enemyId = enemy.id;
       }
       enemy.abilityTimer += 8;
+    }
+  }
+
+  private addMegaHazard(route: Tile[], progress: number, duration: number, speedMultiplier: number, color: number): void {
+    const point = this.positionOnRoute(progress, route);
+    const size = speedMultiplier < 1 ? 3 : 2;
+    const graphic = this.addToBoard(this.add.graphics().setDepth(2));
+    graphic.fillStyle(color, speedMultiplier < 1 ? 0.6 : 0.38).lineStyle(2, color, 0.9)
+      .fillRoundedRect(point.x - BOARD.cell * size / 2, point.y - BOARD.cell * size / 2, BOARD.cell * size, BOARD.cell * size, 4)
+      .strokeRoundedRect(point.x - BOARD.cell * size / 2, point.y - BOARD.cell * size / 2, BOARD.cell * size, BOARD.cell * size, 4);
+    for (let tooth = 0; tooth < size; tooth += 1) graphic.lineStyle(1, 0xfff3c0, 0.85)
+      .lineBetween(point.x - BOARD.cell * size / 2 + tooth * BOARD.cell, point.y - BOARD.cell * size / 2,
+        point.x - BOARD.cell * size / 2 + tooth * BOARD.cell + BOARD.cell / 2, point.y + BOARD.cell * size / 2);
+    this.megaHazards.push({ route, progress, expiresAt: duration === Number.POSITIVE_INFINITY ? duration : this.simTime + duration, speedMultiplier, graphic });
+  }
+
+  private stepMegaHazards(): void {
+    for (let index = this.megaHazards.length - 1; index >= 0; index -= 1) {
+      const hazard = this.megaHazards[index]!;
+      if (this.simTime < hazard.expiresAt) continue;
+      hazard.graphic.destroy();
+      this.megaHazards.splice(index, 1);
+    }
+  }
+
+  private showMegaPulse(enemy: ActiveEnemy, color: number, radius: number): void {
+    const pulse = this.addToBoard(this.add.circle(enemy.sprite.x, enemy.sprite.y, BOARD.cell, color, 0.08).setStrokeStyle(3, color, 0.95).setDepth(7));
+    this.tweens.add({ targets: pulse, radius: radius * BOARD.cell, alpha: 0, duration: 500, onComplete: () => pulse.destroy() });
+  }
+
+  private stepMegaBoss(enemy: ActiveEnemy): void {
+    const ratio = enemy.hp / enemy.maxHp;
+    const clockwork = enemy.spec.ability === 'doomsdayClockworkGoliath';
+    if (clockwork) {
+      if (enemy.megaPhase === 1 && ratio <= 0.66) {
+        enemy.megaPhase = 2;
+        enemy.spec = { ...enemy.spec, armor: Math.max(0, enemy.spec.armor - 10), speed: enemy.spec.speed * 2 };
+        enemy.megaAbilityTimer = this.simTime + 8;
+        enemy.label.setText('PHASE 2');
+        enemy.sprite.setStrokeStyle(3, 0xff9e47, 1);
+        this.showMegaPulse(enemy, 0xff9e47, 6);
+        for (let index = 0; index < 4; index += 1) this.createEnemy('teeth', Math.min(enemy.route.length - 0.01, enemy.pathProgress + 1 + index * 0.35), enemy.route);
+      }
+      if (enemy.megaPhase === 2 && ratio <= 0.33) {
+        enemy.megaPhase = 3;
+        enemy.megaTransitionUntil = this.simTime + 3;
+        enemy.megaAbilityTimer = enemy.megaTransitionUntil;
+        enemy.label.setText('PHASE 3');
+        enemy.sprite.setStrokeStyle(3, 0x87d7ff, 1);
+        this.showMegaPulse(enemy, 0x8be9ff, 10);
+      }
+      if (enemy.megaPhase === 3 && ratio <= 0.15) this.triggerClockworkReverseGears(enemy);
+      if (this.simTime < enemy.megaAbilityTimer) return;
+      if (enemy.megaPhase === 1) {
+        this.showMegaPulse(enemy, 0xe9be61, 6);
+        this.disableTowersAround(enemy.sprite.x, enemy.sprite.y, 6, 2);
+        enemy.megaAbilityTimer = this.simTime + 6;
+      } else if (enemy.megaPhase === 2) {
+        this.showMegaPulse(enemy, 0xff8749, 5);
+        this.disableTowersAround(enemy.sprite.x, enemy.sprite.y, 5, 4);
+        enemy.megaAbilityTimer = this.simTime + 8;
+      } else {
+        this.showMegaPulse(enemy, 0x87d7ff, 10);
+        this.disableTowersAround(enemy.sprite.x, enemy.sprite.y, 10, 3);
+        enemy.megaAbilityTimer = this.simTime + 10;
+      }
+      return;
+    }
+
+    if (enemy.megaPhase === 1 && ratio <= 0.66) {
+      enemy.megaPhase = 2;
+      enemy.megaShieldHp = endlessMegaBossShield(enemy.maxHp);
+      enemy.megaAbilityTimer = this.simTime + 8;
+      enemy.label.setText('PHASE 2 · SHIELDED');
+      enemy.sprite.setStrokeStyle(3, 0xf8b143, 1);
+      this.showMegaPulse(enemy, 0xf8b143, 4);
+      for (const other of this.enemies) if (other.alive && other !== enemy
+        && other.route === enemy.route && Math.abs(other.pathProgress - enemy.pathProgress) <= 4) this.damageEnemy(other, undefined, 10000);
+    }
+    if (enemy.megaPhase === 2 && ratio <= 0.33) {
+      enemy.megaPhase = 3;
+      enemy.megaAbilityTimer = this.simTime + 5;
+      enemy.label.setText('PHASE 3');
+      enemy.sprite.setStrokeStyle(3, 0xc77bff, 1);
+      this.showMegaPulse(enemy, 0xc77bff, 7);
+    }
+    if (this.simTime < enemy.megaAbilityTimer) return;
+    if (enemy.megaPhase === 1) {
+      const center = { x: enemy.sprite.x, y: enemy.sprite.y };
+      const candidates = this.towers.filter((tower) => Phaser.Math.Distance.Between(center.x, center.y, this.towerCenter(tower.tile, tower.spec).x, this.towerCenter(tower.tile, tower.spec).y) <= 8 * BOARD.cell);
+      const target = candidates[Math.floor(Math.random() * candidates.length)];
+      if (target) {
+        const at = this.towerCenter(target.tile, target.spec);
+        const grab = this.addToBoard(this.add.graphics().setDepth(6));
+        grab.lineStyle(4, 0x9ae8f1, 0.9).lineBetween(center.x, center.y, at.x, at.y);
+        this.tweens.add({ targets: grab, alpha: 0, duration: 550, onComplete: () => grab.destroy() });
+        target.disabledUntil = Math.max(target.disabledUntil, this.simTime + 4);
+        target.stunHitUntil = Math.max(target.stunHitUntil, this.simTime + 1.1);
+        this.showTowerStunWave(at.x, at.y, 1.5);
+      }
+      const debrisReady = enemy.passiveStacks.get('hydra-debris-ready') ?? 0;
+      if (this.simTime >= debrisReady) {
+        this.addMegaHazard(enemy.route, Math.min(enemy.route.length - 1, enemy.pathProgress + 1), 3, 1.3, 0xc58b62);
+        this.addMegaHazard(enemy.route, Math.max(0, enemy.pathProgress - 1), 3, 1.3, 0xc58b62);
+        enemy.passiveStacks.set('hydra-debris-ready', this.simTime + 9);
+      }
+      enemy.megaAbilityTimer = this.simTime + 5;
+    } else if (enemy.megaPhase === 2) {
+      enemy.passiveStacks.set('hydra-vortex-until', this.simTime + 3);
+      enemy.megaVortexGlow?.setVisible(true);
+      this.showMegaPulse(enemy, 0x76e7ff, 10);
+      enemy.megaAbilityTimer = this.simTime + 8;
+    } else {
+      this.drawHydraBeam(enemy);
+      enemy.megaAbilityTimer = this.simTime + 10;
+    }
+  }
+
+  private drawHydraBeam(enemy: ActiveEnemy): void {
+    const from = this.positionOnRoute(enemy.pathProgress, enemy.route);
+    const ahead = this.positionOnRoute(Math.min(enemy.route.length - 1, enemy.pathProgress + 1), enemy.route);
+    const angle = Math.atan2(ahead.y - from.y, ahead.x - from.x);
+    const length = 12 * BOARD.cell;
+    const to = { x: from.x + Math.cos(angle) * length, y: from.y + Math.sin(angle) * length };
+    const beam = this.addToBoard(this.add.graphics().setDepth(7));
+    beam.lineStyle(BOARD.cell * 1.2, 0xa64eff, 0.35).lineBetween(from.x, from.y, to.x, to.y);
+    beam.lineStyle(BOARD.cell * 0.34, 0xf3c3ff, 0.98).lineBetween(from.x, from.y, to.x, to.y);
+    this.tweens.add({ targets: beam, alpha: 0, duration: 600, onComplete: () => beam.destroy() });
+    for (const tower of this.towers) {
+      const at = this.towerCenter(tower.tile, tower.spec);
+      const projection = Phaser.Math.Clamp(((at.x - from.x) * (to.x - from.x) + (at.y - from.y) * (to.y - from.y)) / (length * length), 0, 1);
+      const near = { x: from.x + (to.x - from.x) * projection, y: from.y + (to.y - from.y) * projection };
+      if (Phaser.Math.Distance.Between(at.x, at.y, near.x, near.y) <= BOARD.cell * 0.8) {
+        tower.shieldHp = 0;
+        tower.disabledUntil = Math.max(tower.disabledUntil, this.simTime + 4);
+      }
+    }
+  }
+
+  private triggerClockworkReverseGears(enemy: ActiveEnemy): void {
+    if (enemy.spec.ability !== 'doomsdayClockworkGoliath' || enemy.megaPhase !== 3
+      || enemy.hp / enemy.maxHp > 0.15 || this.endlessReverseGearsUsed) return;
+    this.endlessReverseGearsUsed = true;
+    enemy.triggeredThresholds.add(15);
+    this.showMegaPulse(enemy, 0xff6a78, 14);
+    for (const other of this.enemies) if (other.alive && !other.spec.boss) {
+      other.pathProgress = Math.max(0, other.pathProgress - 3);
+      this.positionEnemy(other);
     }
   }
 
@@ -1472,6 +1788,7 @@ export class GameScene extends Phaser.Scene {
 
   private triggerEnemyDefeatAbility(enemy: ActiveEnemy): void {
     const ability = enemy.spec.ability;
+    if (ability === 'abyssalJunkHydra') this.addMegaHazard(enemy.route, enemy.pathProgress, Number.POSITIVE_INFINITY, 0.5, 0x8b62b1);
     if (ability === 'piñata') this.disableTowersAround(enemy.sprite.x, enemy.sprite.y, 3, 3);
     if (ability === 'nestingDoll') {
       for (let i = 0; i < 5; i += 1) this.createEnemy('sock', enemy.pathProgress, enemy.route);
@@ -1504,6 +1821,7 @@ export class GameScene extends Phaser.Scene {
     for (const tower of this.towers) {
       const center = this.towerCenter(tower.tile, tower.spec);
       if (Phaser.Math.Distance.Between(x, y, center.x, center.y) <= radiusPx) {
+        if (tower.shieldHp > 0) { tower.shieldHp = 0; continue; }
         tower.disabledUntil = Math.max(tower.disabledUntil, this.simTime + seconds);
         tower.stunHitUntil = Math.max(tower.stunHitUntil, this.simTime + 1.1);
         affected.push(tower);
@@ -2275,7 +2593,7 @@ export class GameScene extends Phaser.Scene {
         const phase = this.simTime * 3 + index * Math.PI;
         bird.setPosition(center.x + Math.cos(phase) * 7, center.y + Math.sin(phase) * 6 - 5);
         if (tower.disabledUntil > this.simTime || this.towerStunUntil > this.simTime) continue;
-        tower.helperPigeonCooldowns[index] = Math.max(0, tower.helperPigeonCooldowns[index]! - dt * this.globalAttackSpeedMultiplier());
+        tower.helperPigeonCooldowns[index] = Math.max(0, tower.helperPigeonCooldowns[index]! - dt * tower.attackSpeedMultiplier * this.globalAttackSpeedMultiplier());
         if (tower.helperPigeonCooldowns[index]! > 0) continue;
         const target = this.chooseTarget(this.enemies.filter((enemy) => enemy.alive
           && this.distanceToPathTiles(this.towerGridCenter(tower), enemy.pathProgress, enemy.route) <= 3), tower.priority);
@@ -2287,21 +2605,27 @@ export class GameScene extends Phaser.Scene {
   }
 
   private stepTowers(dt: number): void {
-    const globalSpeed = this.globalAttackSpeedMultiplier();
+    const globalSpeedBase = this.globalAttackSpeedMultiplier();
     for (const tower of this.towers) {
       tower.attackSpeedMultiplier = tower.baseAttackSpeedMultiplier;
       tower.pigeonRangeAuraMultiplier = 1;
       const disabled = tower.disabledUntil > this.simTime || this.towerStunUntil > this.simTime;
-      tower.sprite.setAlpha(disabled ? 0.38 : 1);
-      tower.sprite.setStrokeStyle(this.simTime < tower.stunHitUntil ? 3 : 1.5, this.simTime < tower.stunHitUntil ? 0xff6d9e : 0x10232c, 1);
-      tower.art.setAlpha(disabled ? 0.4 : 1);
-      tower.label.setAlpha(disabled ? 0.45 : 1);
+      const siphoned = tower.siphonSlowUntil > this.simTime;
+      tower.sprite.setAlpha(disabled ? 0.38 : siphoned ? 0.75 : 1);
+      tower.sprite.setStrokeStyle(this.simTime < tower.stunHitUntil ? 3 : siphoned || tower.shieldHp > 0 ? 2.5 : 1.5,
+        this.simTime < tower.stunHitUntil ? 0xff6d9e : siphoned ? 0xff36cf : tower.shieldHp > 0 ? 0x7cecff : 0x10232c, 1);
+      tower.art.setAlpha(disabled ? 0.4 : siphoned ? 0.75 : 1);
+      tower.label.setAlpha(disabled ? 0.45 : siphoned ? 0.75 : 1);
       this.stepPassiveUpgradeEffects(tower, dt);
       if (tower.spec.attackType === 'trafficLight') this.stepTrafficLight(tower, dt);
     }
     for (const tower of this.towers) this.applyTowerAuras(tower);
+    for (const tower of this.towers) if (tower.siphonSlowUntil > this.simTime) {
+      tower.attackSpeedMultiplier *= Math.max(0.2, 1 - tower.siphonSlowAmount);
+    }
     this.stepPigeonHelpers(dt);
     for (const tower of this.towers) {
+      const globalSpeed = globalSpeedBase;
       if (tower.disabledUntil > this.simTime || this.towerStunUntil > this.simTime) continue;
       if (tower.spec.attackType === 'trafficLight') continue;
       if (tower.spec.attackType === 'fortress') continue;
@@ -3128,6 +3452,7 @@ export class GameScene extends Phaser.Scene {
   private applyTowerAuras(tower: PlacedTower): void {
     if (tower.disabledUntil > this.simTime) return;
     const teddyAura = tower.spec.id === 'giantMechTeddyBear';
+    const teddyShield = teddyAura && tower.ranks[0]! >= 5;
     const clawAura = tower.spec.id === 'arcadeClawMachine' && tower.ranks[1]! >= 2;
     const clawRush = tower.spec.id === 'arcadeClawMachine' && tower.ranks[1]! >= 7
       && (tower.passiveUpgradeTimers.get('claw-rush-until') ?? 0) > this.simTime;
@@ -3140,6 +3465,13 @@ export class GameScene extends Phaser.Scene {
       const distance = Math.hypot(center.x - other.x, center.y - other.y);
       const mapWideTraffic = tower.spec.id === 'sentientTrafficLight' && (tower.passiveUpgradeTimers.get('traffic-active-until') ?? 0) > this.simTime && tower.ranks[1]! >= 7;
       if (mapWideTraffic || clawRush || distance <= (teddyAura ? 6 * tower.cuddleAuraRadiusMultiplier * this.globalRangeMultiplier() : tower.spec.range * tower.rangeMultiplier * this.globalRangeMultiplier())) {
+        if (teddyShield) {
+          const key = `teddy-shield-${nearby.tile.x},${nearby.tile.y}`;
+          if (this.simTime >= (tower.passiveUpgradeTimers.get(key) ?? 0)) {
+            nearby.shieldHp = Math.max(nearby.shieldHp, 100);
+            tower.passiveUpgradeTimers.set(key, this.simTime + 10);
+          }
+        }
         let buffed = false;
         if (tower.spec.attackType === 'supportLaser') { nearby.attackSpeedMultiplier = Math.max(nearby.attackSpeedMultiplier, 1 + 0.15 * tower.supportPowerMultiplier); buffed = true; }
         if (teddyAura) { nearby.attackSpeedMultiplier = Math.max(nearby.attackSpeedMultiplier, 1 + 0.05 * tower.cuddleAuraPowerMultiplier); buffed = true; }
@@ -3164,11 +3496,31 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  private eliteCount(enemy: ActiveEnemy, id: EndlessEliteId): number { return enemy.elites.filter((elite) => elite === id).length; }
+
+  private consumeHermesCrowdControl(enemy: ActiveEnemy): boolean {
+    const charges = endlessHermesCrowdControlCharges(enemy.elites);
+    const used = enemy.passiveStacks.get('hermes-cc-ignored') ?? 0;
+    if (used >= charges) return false;
+    enemy.passiveStacks.set('hermes-cc-ignored', used + 1);
+    return true;
+  }
+
+  private ironArmorAura(enemy: ActiveEnemy): number {
+    if (enemy.elites.length > 0) return 0;
+    return this.enemies.reduce((armor, source) => {
+      if (!source.alive || source.route !== enemy.route || source.eliteEcho) return armor;
+      const stacks = this.eliteCount(source, 'iron');
+      return armor + (stacks > 0 && Math.abs(source.pathProgress - enemy.pathProgress) <= 2 ? 2 * stacks : 0);
+    }, 0);
+  }
+
   private applySlow(enemy: ActiveEnemy, amount: number, seconds: number, source?: PlacedTower, allowBoss = false): void {
     if ((enemy.spec.boss && !allowBoss) || this.simTime < enemy.ccImmuneUntil) return;
     const effectiveness = enemy.spec.miniboss ? 0.5 : 1;
     const weakenedSlow = Math.max(0, amount - this.mutationStack('weakeningSlow') * 0.15);
     const effectiveSlow = Math.min(0.9, weakenedSlow * effectiveness);
+    if (effectiveSlow > 0 && this.consumeHermesCrowdControl(enemy)) return;
     if (effectiveSlow > 0 && source) {
       const targets = this.waveDebuffTargets.get(source) ?? new Set<number>();
       targets.add(enemy.id);
@@ -3180,14 +3532,16 @@ export class GameScene extends Phaser.Scene {
   }
 
   private applyStun(enemy: ActiveEnemy, seconds: number, allowBoss = false, source?: PlacedTower): void {
-    if ((enemy.spec.boss && !allowBoss) || this.simTime < enemy.ccImmuneUntil || this.simTime < enemy.stunImmuneUntil) return;
+    if ((enemy.spec.boss && !allowBoss) || this.simTime < enemy.ccImmuneUntil || this.simTime < enemy.stunImmuneUntil || this.eliteCount(enemy, 'nullField') > 0) return;
+    if (this.consumeHermesCrowdControl(enemy)) return;
     const stunBonus = source?.spec.id === 'arcadeClawMachine' && source.ranks[2]! >= 1 ? 1.05 : 1;
     enemy.stunUntil = Math.max(enemy.stunUntil, this.simTime + seconds * stunBonus * (enemy.spec.miniboss ? 0.5 : 1));
     enemy.stunImmuneUntil = this.simTime + 1;
   }
 
   private applyFreeze(enemy: ActiveEnemy, seconds: number, source?: PlacedTower, allowBoss = false): void {
-    if ((enemy.spec.boss && !allowBoss) || this.simTime < enemy.ccImmuneUntil || this.simTime < enemy.stunImmuneUntil) return;
+    if ((enemy.spec.boss && !allowBoss) || this.simTime < enemy.ccImmuneUntil || this.simTime < enemy.stunImmuneUntil || this.eliteCount(enemy, 'nullField') > 0) return;
+    if (this.consumeHermesCrowdControl(enemy)) return;
     const duration = seconds * (enemy.spec.miniboss ? 0.5 : 1);
     enemy.freezeUntil = Math.max(enemy.freezeUntil, this.simTime + duration);
     enemy.stunUntil = Math.max(enemy.stunUntil, enemy.freezeUntil);
@@ -3237,7 +3591,11 @@ export class GameScene extends Phaser.Scene {
     const eligible = allModifiers.filter((card) => this.mutationStack(card.id) < card.stackCap);
     Phaser.Utils.Array.Shuffle(eligible);
     const choices = eligible.slice(0, 3);
-    if (choices.length === 0) { this.modifierChoiceOpen = false; return; }
+    if (choices.length === 0) {
+      this.modifierChoiceOpen = false;
+      if (this.endlessMode && this.wave > STAGE_ONE_WAVES.length) this.showEndlessPrep();
+      return;
+    }
     const background = this.add.rectangle(W / 2, H / 2, W, H, 0x071016, 0.84).setDepth(40).setInteractive();
     const panel = this.add.rectangle(W / 2, H / 2, 700, 370, 0x203643).setStrokeStyle(2, 0x6fc8e8).setDepth(41);
     const title = this.add.text(W / 2, 210, `WAVE ${this.wave} MUTATION`, {
@@ -3283,6 +3641,7 @@ export class GameScene extends Phaser.Scene {
       ? `${choice.name.toUpperCase()} APPLIED · FORCED: ${forcedBonus.name.toUpperCase()}`
       : `${choice.name.toUpperCase()} APPLIED`;
     this.updateHUD();
+    if (this.endlessMode && this.wave > STAGE_ONE_WAVES.length) this.showEndlessPrep();
   }
 
   private applyMutation(choice: CampaignMutation): void {
@@ -3368,6 +3727,7 @@ export class GameScene extends Phaser.Scene {
 
   private damageEnemy(enemy: ActiveEnemy, tower: PlacedTower | undefined, rawDamage: number, singleTargetHit = false, impactResolved = false, damageCreditSource?: PlacedTower, exactDamage = false): void {
     if (!enemy.alive) return;
+    if (enemy.spec.ability === 'doomsdayClockworkGoliath' && enemy.megaPhase === 3 && this.simTime < enemy.megaTransitionUntil) return;
     if (tower && !exactDamage && this.mutationStack('unsteadyAim') && Math.random() < 0.1) return;
     if (tower && !exactDamage) rawDamage = this.applyUpgradeHitEffects(tower, enemy, rawDamage, singleTargetHit);
     if (tower && PHYSICAL_PROJECTILE_TOWER_IDS.has(tower.spec.id)) {
@@ -3376,6 +3736,8 @@ export class GameScene extends Phaser.Scene {
         && Phaser.Math.Distance.Between(enemy.sprite.x, enemy.sprite.y, candidate.sprite.x, candidate.sprite.y) <= 6 * BOARD.cell);
       if (vacuum) enemy = vacuum;
     }
+    if (tower && PHYSICAL_PROJECTILE_TOWER_IDS.has(tower.spec.id) && enemy.spec.ability === 'abyssalJunkHydra'
+      && this.simTime < (enemy.passiveStacks.get('hydra-vortex-until') ?? 0)) return;
     if (tower && !impactResolved && this.projectileSlowedByTape(tower, enemy)) {
       // Use the existing short shot animation as the prototype's baseline travel time.
       this.pendingImpacts.push({ enemyId: enemy.id, tower, damage: rawDamage, singleTargetHit, dueAt: this.simTime + 0.095 / 0.7 });
@@ -3412,7 +3774,8 @@ export class GameScene extends Phaser.Scene {
     const activeClawShred = this.simTime < enemy.clawArmorShredUntil ? enemy.clawArmorShred : 0;
     const dent = enemy.passiveStacks.get('crusher-dent') ?? 0;
     const activeArmorShred = this.simTime < enemy.armorShredUntil ? enemy.armorShred : 0;
-    const effectiveArmor = ignoresArmorOnCritical ? 0 : enemy.spec.armor < 0 ? enemy.spec.armor : Math.max(0, enemy.spec.armor - dent * 5) * (1 - Math.max(activeArmorShred, activeClawShred));
+    const totalArmor = enemy.spec.armor + this.ironArmorAura(enemy);
+    const effectiveArmor = ignoresArmorOnCritical ? 0 : totalArmor < 0 ? totalArmor : Math.max(0, totalArmor - dent * 5) * (1 - Math.max(activeArmorShred, activeClawShred));
     const afterArmor = exactDamage ? rawDamage : Math.max(1, rawDamage - effectiveArmor);
     let damageTakenMultiplier = this.simTime < enemy.damageTakenUntil ? enemy.damageTakenMultiplier : 1;
     if (tower && enemy.wetUntil > this.simTime && (tower.spec.attackType === 'freeze' || tower.spec.id === 'unstableToasterLauncher')) damageTakenMultiplier *= 1.25;
@@ -3427,9 +3790,26 @@ export class GameScene extends Phaser.Scene {
     const flatHyperarmorReduction = this.simTime < enemy.trafficHyperarmorUntil ? enemy.trafficHyperarmorReduction : 0;
     const activeHyperarmorShred = this.simTime < enemy.hyperarmorShredUntil ? enemy.hyperarmorShred : 0;
     const effectiveHyperarmor = enemy.spec.hyperarmor < 0 ? enemy.spec.hyperarmor : Math.max(0, enemy.spec.hyperarmor - flatHyperarmorReduction) * (1 - activeHyperarmorShred);
-    const damage = exactDamage ? Math.max(1, Math.floor(afterArmor)) : Math.max(1, Math.floor(afterArmor * (1 - effectiveHyperarmor / 200) * damageTakenMultiplier));
+    let damage = exactDamage ? Math.max(1, Math.floor(afterArmor)) : Math.max(1, Math.floor(afterArmor * (1 - effectiveHyperarmor / 200) * damageTakenMultiplier));
+    if (enemy.spec.ability === 'doomsdayClockworkGoliath' || enemy.spec.ability === 'abyssalJunkHydra') {
+      damage = endlessMegaBossDamageLimit(enemy.hp, enemy.maxHp, enemy.megaPhase, damage);
+      if (damage <= 0) return;
+    }
+    if (enemy.megaShieldHp > 0) {
+      const absorbed = Math.min(enemy.megaShieldHp, damage);
+      enemy.megaShieldHp -= absorbed;
+      damage -= absorbed;
+      this.positionEnemy(enemy);
+      if (damage <= 0) return;
+    }
     const actualHpRemoved = Math.min(enemy.hp, damage);
     enemy.hp -= damage;
+    this.triggerClockworkReverseGears(enemy);
+    if (tower && this.eliteCount(enemy, 'siphon') > 0) {
+      if (tower.siphonSlowUntil <= this.simTime) tower.siphonSlowAmount = 0;
+      tower.siphonSlowAmount = Math.max(tower.siphonSlowAmount, endlessSiphonSlowPerHit(enemy.elites));
+      tower.siphonSlowUntil = this.simTime + 1;
+    }
     const creditSource = tower ?? damageCreditSource;
     // Summoned units pass their owning tower here so only actual HP removed
     // contributes to that tower's wave damage and mastery score.
@@ -3440,11 +3820,24 @@ export class GameScene extends Phaser.Scene {
       enemy.clawArmorShred = 0.5; enemy.clawArmorShredUntil = this.simTime + 5;
     }
     this.processEnemyThresholds(enemy);
+    if (!enemy.eliteEcho && !enemy.eliteEchoSpawned && this.eliteCount(enemy, 'splitEcho') > 0 && enemy.hp > 0 && enemy.hp <= enemy.maxHp * 0.5) {
+      enemy.eliteEchoSpawned = true;
+      const echoes = this.eliteCount(enemy, 'splitEcho');
+      for (let index = 0; index < echoes; index += 1) {
+        const echo = this.createEnemy(enemy.spec.id as EnemyKey, Math.max(0, enemy.pathProgress - 1), enemy.route, [], true);
+        const bloodStages = endlessBloodPactStages(enemy.hp, enemy.maxHp);
+        const slowFactor = this.simTime < enemy.slowUntil ? 1 - enemy.slowAmount : 1;
+        const momentumFactor = this.simTime < enemy.speedBoostUntil ? 1.5 : this.simTime < enemy.reverseMomentumUntil ? 1.1 : 1;
+        echo.spec = { ...echo.spec, speed: enemy.spec.speed * (1 + bloodStages * 0.15 * this.eliteCount(enemy, 'brute')) * slowFactor * momentumFactor };
+        echo.hp = 1; echo.maxHp = 1; this.positionEnemy(echo);
+      }
+    }
     this.positionEnemy(enemy);
     if (enemy.hp <= 0) {
       unlockBestiaryEntry(this.registry, enemy.spec.id as EnemyKey);
       const baseBounty = starScaledBounty(enemy.spec.bounty, this.star);
       let bounty = Math.floor(baseBounty * Math.max(0, 1 + Math.min(1.5, this.mutationStack('bountySurge') * 0.2) - Math.min(0.8, this.mutationStack('leanBounties') * 0.2)));
+      if (!enemy.eliteEcho) bounty *= endlessEliteStats(enemy.spec, enemy.elites).bountyMultiplier;
       const rewardTower = tower ?? damageCreditSource;
       if (rewardTower?.spec.id === 'sodaMachineMech' && rewardTower.ranks[1]! >= 5) bounty *= 2;
       if (rewardTower?.spec.id === 'arcadeClawMachine' && rewardTower.ranks[1]! >= 5) bounty *= 3;
@@ -3454,7 +3847,7 @@ export class GameScene extends Phaser.Scene {
       if (rewardTower?.spec.id === 'sodaMachineMech' && rewardTower.ranks[1]! >= 2) bounty += 2;
       if ((enemy.spec.boss || enemy.spec.miniboss) && this.towers.some((soda) => soda.spec.id === 'sodaMachineMech' && soda.ranks[1]! >= 6
         && this.distanceToPathTiles(this.towerGridCenter(soda), enemy.pathProgress, enemy.route) <= soda.spec.range * soda.rangeMultiplier)) bounty += 50;
-      if (this.endlessMode && enemy.waveNumber > 15) bounty = Math.floor(bounty * endlessBountyMultiplier(enemy.waveNumber));
+      if (this.endlessMode && enemy.waveNumber > 15 && enemy.spec.ability !== 'doomsdayClockworkGoliath' && enemy.spec.ability !== 'abyssalJunkHydra') bounty = Math.floor(bounty * endlessBountyMultiplier(enemy.waveNumber));
       if (this.mutationStack('phantomBounties')) {
         const roll = Math.random();
         bounty *= roll < 0.25 ? 2 : roll < 0.5 ? 0 : 1;
@@ -3667,7 +4060,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private applyPushback(enemy: ActiveEnemy, distance: number): void {
-    if (!enemy.alive || enemy.spec.miniboss || enemy.spec.boss || this.simTime < enemy.pushImmuneUntil) return;
+    if (!enemy.alive || enemy.spec.miniboss || enemy.spec.boss || this.eliteCount(enemy, 'nullField') > 0 || this.simTime < enemy.pushImmuneUntil) return;
     enemy.pathProgress = Math.max(0, enemy.pathProgress - distance);
     enemy.pushImmuneUntil = this.simTime + 0.8;
     this.positionEnemy(enemy);
@@ -4028,6 +4421,8 @@ export class GameScene extends Phaser.Scene {
       baseAttackSpeedMultiplier: 1, guanoDropTimer: 0, helperPigeons: [], helperPigeonCooldowns: [],
       pigeonAttackRampSeconds: 0, pigeonRangeAuraMultiplier: 1, armadaCooldown: 0, armadaRemaining: 0, armadaPulseTimer: 0,
       acquiredUpgrades: [], shotCounter: 0, criticalChance: 0,
+      siphonSlowUntil: 0, siphonSlowAmount: 0,
+      shieldHp: 0,
       passiveUpgradeTimers: new Map(),
       disabledUntil: 0, stunHitUntil: 0,
       noSell: this.mysteryTowerMode,
@@ -4121,6 +4516,9 @@ export class GameScene extends Phaser.Scene {
     enemy.art.setPosition(x, y);
     enemy.hpBar.setPosition(x, y - enemy.sprite.radius - 2.5).setSize(Math.max(2, enemy.sprite.radius * 2 * enemy.hp / enemy.maxHp), 2.4);
     enemy.label.setPosition(x, y);
+    enemy.eliteGlows.forEach((glow, index) => glow.setPosition(x, y).setRadius(enemy.sprite.radius + 2 + index * 1.5));
+    enemy.megaShieldGlow?.setPosition(x, y).setRadius(enemy.sprite.radius + 5).setVisible(enemy.megaShieldHp > 0);
+    enemy.megaVortexGlow?.setPosition(x, y).setRadius(enemy.sprite.radius + 10).setVisible((enemy.passiveStacks.get('hydra-vortex-until') ?? 0) > this.simTime);
   }
 
   private positionOnRoute(progress: number, route: Tile[] = this.route): { x: number; y: number } {
@@ -4173,6 +4571,9 @@ export class GameScene extends Phaser.Scene {
   private removeEnemy(enemy: ActiveEnemy): void {
     enemy.alive = false;
     enemy.sprite.destroy(); enemy.art.destroy(); enemy.hpBar.destroy(); enemy.label.destroy();
+    enemy.eliteGlows.forEach((glow) => glow.destroy());
+    enemy.megaShieldGlow?.destroy();
+    enemy.megaVortexGlow?.destroy();
   }
 
   /** Small, crisp vector silhouettes keep the units recognizable at every board zoom. */
@@ -4325,6 +4726,24 @@ export class GameScene extends Phaser.Scene {
       case 'bubbleBath': dot(-3,-2,1.5,0xb7f5ff); dot(2,-3,2,0xd7fbff); dot(0,2,1.6,0x49bbda); dot(4,2,0.8,0xf7ffff); break;
       case 'alarm': dot(-4,-4,2,spec.color); dot(4,-4,2,spec.color); line(0,-3,0,1,light,0.9); line(0,1,3,2,light,0.9); line(-4,4,-4,6,ink,1); line(4,4,4,6,ink,1); break;
       case 'tape': g.lineStyle(Math.max(1.5,r*0.36),0xffdc55,1).strokeCircle(0,0,r*0.5); g.lineStyle(Math.max(0.8,r*0.17),0x8a6431,1).strokeCircle(0,0,r*0.2); line(-4,3,4,3,0xfff1bb,0.8); break;
+      case 'doomsdayClockworkGoliath':
+        g.lineStyle(Math.max(2, r * 0.14), 0x70471e, 1).strokeCircle(0, 0, r * 0.9);
+        for (let tooth = 0; tooth < 12; tooth += 1) { const angle = tooth * Math.PI / 6; line(Math.cos(angle) * r * 0.78, Math.sin(angle) * r * 0.78, Math.cos(angle) * r * 1.02, Math.sin(angle) * r * 1.02, 0xf0bf52, Math.max(1.5, r * 0.12)); }
+        g.fillStyle(0x9b6030, 1).fillRoundedRect(-r * 0.58, -r * 0.66, r * 1.16, r * 1.32, r * 0.18);
+        g.fillStyle(0x302d37, 1).fillCircle(0, -r * 0.05, r * 0.38); g.lineStyle(Math.max(1.5, r * 0.08), 0xffe27b, 1).strokeCircle(0, -r * 0.05, r * 0.33);
+        line(0, -r * 0.05, r * 0.18, -r * 0.24, 0xfff0a2, Math.max(1.5, r * 0.07)); line(0, -r * 0.05, -r * 0.21, r * 0.05, 0xfff0a2, Math.max(1.5, r * 0.07));
+        dot(-r * 0.2, r * 0.52, r * 0.08, 0xff765e); dot(r * 0.2, r * 0.52, r * 0.08, 0xff765e); break;
+      case 'abyssalJunkHydra':
+        g.fillStyle(0x3c344e, 1).fillRoundedRect(-r * 0.53, -r * 0.1, r * 1.06, r * 0.78, r * 0.2);
+        line(-r * 0.35, -r * 0.05, -r * 0.64, -r * 0.5, 0x91d5db, Math.max(2, r * 0.14));
+        line(0, -r * 0.15, 0, -r * 0.76, 0xa7e7e7, Math.max(2, r * 0.14));
+        line(r * 0.35, -r * 0.05, r * 0.64, -r * 0.5, 0x91d5db, Math.max(2, r * 0.14));
+        for (const [x, y] of [[-r * 0.66, -r * 0.58], [0, -r * 0.82], [r * 0.66, -r * 0.58]]) {
+          g.fillStyle(0x80736a, 1).fillRoundedRect(x - r * 0.22, y - r * 0.19, r * 0.44, r * 0.38, r * 0.12);
+          dot(x - r * 0.08, y - r * 0.02, r * 0.045, 0xff4b8f); dot(x + r * 0.08, y - r * 0.02, r * 0.045, 0xff4b8f);
+        }
+        for (let cable = -2; cable <= 2; cable += 1) line(cable * r * 0.12, r * 0.5, cable * r * 0.2, r * 0.85, 0x64d5e6, Math.max(1, r * 0.045));
+        break;
       default: eye(-2,0); eye(2,0); break;
     }
     return g;
@@ -4401,7 +4820,10 @@ export class GameScene extends Phaser.Scene {
         this.selectedEnemy.wetUntil > this.simTime ? 'WET' : '',
       ].filter(Boolean).join(' · ');
       this.bottomBarTitle?.setText('ENEMY INSPECTOR').setColor('#6fc8e8');
-      this.enemyInspectorLabel?.setText(`${spec.name}  ·  HP ${Math.max(0, Math.ceil(hp))}/${this.selectedEnemy.maxHp}  ·  Speed ${spec.speed}  ·  ${armorText}  ·  ${hyperarmorText}${statuses ? `  ·  ${statuses}` : ''}`);
+      const eliteText = this.selectedEnemy.elites.length ? `  ·  ELITES ${this.selectedEnemy.elites.map((id) => endlessEliteSpec(id).name).join(', ')}` : '';
+      const megaStatus = spec.ability === 'doomsdayClockworkGoliath' || spec.ability === 'abyssalJunkHydra'
+        ? `  ·  MEGA BOSS PHASE ${this.selectedEnemy.megaPhase}${this.selectedEnemy.megaShieldHp > 0 ? ` · SHIELD ${Math.ceil(this.selectedEnemy.megaShieldHp)}` : ''}` : '';
+      this.enemyInspectorLabel?.setText(`${spec.name}  ·  HP ${Math.max(0, Math.ceil(hp))}/${this.selectedEnemy.maxHp}  ·  Speed ${spec.speed}  ·  ${armorText}  ·  ${hyperarmorText}${megaStatus}${eliteText}${statuses ? `  ·  ${statuses}` : ''}`);
       this.upgradeConfirmButton?.setVisible(false);
       this.upgradeConfirmLabel?.setVisible(false);
       this.upgradeDenyButton?.setVisible(false);

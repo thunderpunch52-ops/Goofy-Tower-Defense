@@ -1,5 +1,5 @@
 export type EnemyAbility = 'piñata' | 'nestingDoll' | 'teeth' | 'bubbleBath' | 'alarm' | 'tapeRoller'
-  | 'lawnMower' | 'overlordFridge' | 'piggyBank' | 'cosmicVacuum';
+  | 'lawnMower' | 'overlordFridge' | 'piggyBank' | 'cosmicVacuum' | 'doomsdayClockworkGoliath' | 'abyssalJunkHydra';
 
 export interface EnemySpec {
   id: string;
@@ -35,6 +35,8 @@ export const ENEMIES: Record<string, EnemySpec> = {
   overlordFridge: { id: 'overlordFridge', name: 'The Overlord Fridge', shortName: 'Fridge', hp: 20000, speed: 0.5, armor: 20, hyperarmor: 45, leak: 100, bounty: 1200, color: 0x76c6dd, boss: true, ability: 'overlordFridge' },
   piggyBank: { id: 'piggyBank', name: 'The Mega Piggy Bank', shortName: 'Piggy Bank', hp: 15000, speed: 0.75, armor: 10, hyperarmor: 20, leak: 100, bounty: 2000, color: 0xf078ae, boss: true, ability: 'piggyBank' },
   cosmicVacuum: { id: 'cosmicVacuum', name: 'The Cosmic Vacuum Cleaner', shortName: 'Vacuum', hp: 28000, speed: 0.5, armor: 25, hyperarmor: 50, leak: 100, bounty: 2500, color: 0xa889ec, boss: true, ability: 'cosmicVacuum' },
+  doomsdayClockworkGoliath: { id: 'doomsdayClockworkGoliath', name: 'The Doomsday Clockwork Goliath', shortName: 'Clockwork Goliath', hp: 60000, speed: 0.4, armor: 20, hyperarmor: 40, leak: 100, bounty: 5000, color: 0xd2a448, boss: true, ability: 'doomsdayClockworkGoliath' },
+  abyssalJunkHydra: { id: 'abyssalJunkHydra', name: 'The Abyssal Junk-Hydra', shortName: 'Junk-Hydra', hp: 75000, speed: 0.35, armor: 15, hyperarmor: 35, leak: 100, bounty: 6000, color: 0x8154c6, boss: true, ability: 'abyssalJunkHydra' },
   pinata: { id: 'pinata', name: 'The Stun-Grenade Piñata', shortName: 'Piñata', hp: 220, speed: 1, armor: 0, hyperarmor: 0, leak: 15, bounty: 25, color: 0xff68a8, ability: 'piñata' },
   nestingDoll: { id: 'nestingDoll', name: 'The Matryoshka Nesting Doll', shortName: 'Nesting Doll', hp: 350, speed: 0.75, armor: 4, hyperarmor: 15, leak: 20, bounty: 40, color: 0xc3794e, ability: 'nestingDoll' },
   teeth: { id: 'teeth', name: 'The Clackin’ Teeth (Wind-Up Jaws)', shortName: 'Teeth', hp: 180, speed: 2, armor: 1, hyperarmor: -5, leak: 10, bounty: 20, color: 0xf4dc8a, ability: 'teeth' },
