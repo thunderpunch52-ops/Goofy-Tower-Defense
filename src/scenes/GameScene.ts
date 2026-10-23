@@ -64,7 +64,7 @@ interface TrackResidue { progress: number; route: Tile[]; expiresAt: number; tic
 interface MiniGnome { progress: number; route: Tile[]; speed: number; sprite: Phaser.GameObjects.Container; tower: PlacedTower }
 interface MiniRoomba { progress: number; route: Tile[]; direction: 1 | -1; speed: number; patrolMin: number; patrolMax: number; sweeper: boolean; hp: number; attackTimer: number; sprite: Phaser.GameObjects.Container; hpBar: Phaser.GameObjects.Rectangle; tower: PlacedTower }
 interface BoxGuard { progress: number; route: Tile[]; hp: number; maxHp: number; armor: number; speed: number; stationed: boolean; attackTimer: number; contactTimers: Map<number, number>; sprite: Phaser.GameObjects.Container; hpBarBack: Phaser.GameObjects.Rectangle; hpBar: Phaser.GameObjects.Rectangle; tower: PlacedTower; heavy: boolean; despawnAt: number }
-interface BoxDrone { sprite: Phaser.GameObjects.Container; hpBarBack: Phaser.GameObjects.Rectangle; hpBar: Phaser.GameObjects.Rectangle; hp: number; maxHp: number; tower: PlacedTower; attackTimer: number; bombTimer: number; temporaryUntil: number }
+interface BoxDrone { sprite: Phaser.GameObjects.Container; hpBarBack: Phaser.GameObjects.Rectangle; hpBar: Phaser.GameObjects.Rectangle; hp: number; maxHp: number; tower: PlacedTower; route: Tile[]; progress: number; speed: number; attackTimer: number; bombTimer: number; temporaryUntil: number }
 interface BoxTurret { tile: Tile; route: Tile[]; progress: number; sprite?: Phaser.GameObjects.Container; hpBarBack?: Phaser.GameObjects.Rectangle; hpBar?: Phaser.GameObjects.Rectangle; statsLabel?: Phaser.GameObjects.Text; hp: number; maxHp: number; armor: number; hyperarmor: number; attackTimer: number; contactTimers: Map<number, number>; rebuildAt: number; tower: PlacedTower; temporaryUntil: number }
 interface PendingImpact { enemyId: number; tower: PlacedTower; damage: number; singleTargetHit: boolean; dueAt: number }
 interface RouteArrow { route: Tile[]; progress: number; elapsed: number; graphic: Phaser.GameObjects.Graphics }
@@ -1908,19 +1908,36 @@ export class GameScene extends Phaser.Scene {
       if (drone.temporaryUntil > 0 && this.simTime >= drone.temporaryUntil) {
         drone.sprite.destroy(); drone.hpBar.destroy(); drone.hpBarBack.destroy(); this.boxDrones.splice(this.boxDrones.indexOf(drone), 1); continue;
       }
-      const center = this.towerCenter(tower.tile, tower.spec);
+      let at = this.positionOnRoute(drone.progress, drone.route);
       const phase = this.simTime * 1.4 + i * Math.PI * 2 / Math.max(1, droneList.length);
-      const droneX = center.x + Math.cos(phase) * BOARD.cell * 1.8;
-      const droneY = center.y + Math.sin(phase) * BOARD.cell * 1.45 - 10;
+      let droneX = at.x + Math.cos(phase) * BOARD.cell * 0.3;
+      let droneY = at.y + Math.sin(phase) * BOARD.cell * 0.3 - 5;
+      const rangeTiles = 10 * tower.rangeMultiplier;
+      let droneTargets = this.enemies.filter((enemy) => enemy.alive
+        && Phaser.Math.Distance.Between(droneX, droneY, enemy.sprite.x, enemy.sprite.y) / BOARD.cell <= rangeTiles);
+      // Each drone marches from the exit toward the entrance, pausing while
+      // it has a target in range. It is removed at the entrance and deployed
+      // again after the normal four-second rebuild interval.
+      if (!droneTargets.length) {
+        drone.progress -= drone.speed * dt;
+        if (drone.progress <= 0.5) {
+          drone.sprite.destroy(); drone.hpBar.destroy(); drone.hpBarBack.destroy();
+          this.boxDrones.splice(this.boxDrones.indexOf(drone), 1);
+          tower.passiveUpgradeTimers.set('cardboard-drone-deploy', 4);
+          continue;
+        }
+        at = this.positionOnRoute(drone.progress, drone.route);
+        droneX = at.x + Math.cos(phase) * BOARD.cell * 0.3;
+        droneY = at.y + Math.sin(phase) * BOARD.cell * 0.3 - 5;
+        droneTargets = this.enemies.filter((enemy) => enemy.alive
+          && Phaser.Math.Distance.Between(droneX, droneY, enemy.sprite.x, enemy.sprite.y) / BOARD.cell <= rangeTiles);
+      }
       drone.sprite.setPosition(droneX, droneY);
       const droneBarWidth = BOARD.cell * 1.1;
       drone.hpBarBack.setPosition(droneX, droneY - 6.5);
       drone.hpBar.setPosition(droneX - droneBarWidth / 2, droneY - 6.5)
         .setSize(droneBarWidth * Math.max(0, drone.hp / drone.maxHp), 1.5)
         .setFillStyle(drone.hp / drone.maxHp <= 0.3 ? 0xef7e70 : drone.hp / drone.maxHp <= 0.6 ? 0xf4c86a : 0x7ce0a0);
-      const rangeTiles = 10 * tower.rangeMultiplier;
-      const droneTargets = this.enemies.filter((enemy) => enemy.alive
-        && Phaser.Math.Distance.Between(droneX, droneY, enemy.sprite.x, enemy.sprite.y) / BOARD.cell <= rangeTiles);
       const dronePriority = tower.ranks[1]! >= 4 ? tower.priority : 'First';
       drone.attackTimer -= dt;
       if (drone.attackTimer <= 0) {
@@ -1956,7 +1973,18 @@ export class GameScene extends Phaser.Scene {
       const droneHp = 100;
       const hpBarBack = this.addToBoard(this.add.rectangle(0, 0, BOARD.cell * 1.1, 2.2, 0x20252a, 0.95).setDepth(7));
       const hpBar = this.addToBoard(this.add.rectangle(0, 0, BOARD.cell * 1.1, 1.5, 0x7ce0a0, 1).setOrigin(0, 0.5).setDepth(8));
-      this.boxDrones.push({ sprite, hpBarBack, hpBar, hp: droneHp, maxHp: droneHp, tower, attackTimer: Math.random() * 0.4, bombTimer: 8, temporaryUntil: normalDroneCount < desiredDrones ? 0 : temporaryUntil });
+      const routes = this.visualRoutes.length ? this.visualRoutes : [this.route];
+      const towerCenter = this.towerGridCenter(tower);
+      const route = [...routes].sort((a, b) => {
+        const exitA = this.positionOnRoute(a.length - 1, a); const exitB = this.positionOnRoute(b.length - 1, b);
+        return Math.hypot(exitA.x - towerCenter.x, exitA.y - towerCenter.y) - Math.hypot(exitB.x - towerCenter.x, exitB.y - towerCenter.y);
+      })[0]!;
+      const routeCount = this.boxDrones.filter((drone) => drone.tower === tower && drone.route === route).length;
+      const progress = Math.max(0.5, route.length - 1 - routeCount * 1.4);
+      const spawn = this.positionOnRoute(progress, route);
+      sprite.setPosition(spawn.x, spawn.y - 5);
+      this.boxDrones.push({ sprite, hpBarBack, hpBar, hp: droneHp, maxHp: droneHp, tower, route, progress, speed: 2.5,
+        attackTimer: Math.random() * 0.4, bombTimer: 8, temporaryUntil: normalDroneCount < desiredDrones ? 0 : temporaryUntil });
       droneDeploy = 4;
     }
     tower.passiveUpgradeTimers.set('cardboard-drone-deploy', droneDeploy);
@@ -1965,13 +1993,21 @@ export class GameScene extends Phaser.Scene {
       if (turret.temporaryUntil > 0 && this.simTime >= turret.temporaryUntil) {
         this.destroyBoxTurretVisuals(turret); this.boxTurrets.splice(this.boxTurrets.indexOf(turret), 1); continue;
       }
+      if (turret.progress <= 0.5) {
+        // A completed exit-to-entrance pass ends the summon. Permanent
+        // artillery is redeployed after its normal deployment interval.
+        this.destroyBoxTurretVisuals(turret);
+        this.boxTurrets.splice(this.boxTurrets.indexOf(turret), 1);
+        tower.passiveUpgradeTimers.set('cardboard-turret-deploy', 4);
+        continue;
+      }
       if (turret.rebuildAt > 0) {
         if (this.simTime < turret.rebuildAt) continue;
         if (this.rebuildBoxTurret(turret)) turret.rebuildAt = 0;
         else { turret.rebuildAt = this.simTime + 1; continue; }
       }
       if (!turret.sprite || !turret.hpBar || !turret.hpBarBack || !turret.statsLabel) continue;
-      // Turrets advance from the entrance toward the exit. They never block
+      // Turrets march from the exit toward the entrance. They never block
       // enemy movement; they pause only while a valid target is in range.
       const turretAt = this.positionOnRoute(turret.progress, turret.route);
       turret.sprite.setPosition(turretAt.x, turretAt.y);
@@ -1980,7 +2016,7 @@ export class GameScene extends Phaser.Scene {
         && Phaser.Math.Distance.Between(turretAt.x, turretAt.y, enemy.sprite.x, enemy.sprite.y) / BOARD.cell <= range);
       const target = this.chooseTarget(inRange, tower.priority);
       if (!target) {
-        turret.progress = Math.min(turret.route.length - 1, turret.progress + 2.5 * dt);
+        turret.progress = Math.max(0, turret.progress - 2.5 * dt);
         const moved = this.positionOnRoute(turret.progress, turret.route);
         turret.sprite.setPosition(moved.x, moved.y);
         turret.tile = turret.route[Math.min(turret.route.length - 1, Math.round(turret.progress))]!;
@@ -2049,31 +2085,28 @@ export class GameScene extends Phaser.Scene {
 
   private spawnBoxArtillery(tower: PlacedTower, temporary = false): boolean {
     const center = this.towerGridCenter(tower);
-    const oneTileSpec = { ...tower.spec, footprint: 1 };
-    const candidates: Tile[] = [];
-    for (let y = 0; y < BOARD_ROWS; y += 1) for (let x = 0; x < BOARD_COLUMNS; x += 1) {
-      const tile = { x, y };
-      const adjacentRoad = [{ x: x - 1, y }, { x: x + 1, y }, { x, y: y - 1 }, { x, y: y + 1 }]
-        .some((neighbor) => this.roadTiles.has(routeKey(neighbor)));
-      const distance = Math.hypot(center.x - x, center.y - y);
-      if (adjacentRoad && distance <= 14 && !this.boxTurrets.some((turret) => turret.sprite && turret.tile.x === x && turret.tile.y === y)
-        && this.isBuildable(tile, oneTileSpec)) candidates.push(tile);
-    }
-    candidates.sort((a, b) => Math.hypot(center.x - a.x, center.y - a.y) - Math.hypot(center.x - b.x, center.y - b.y));
-    const tile = candidates[0];
-    if (!tile) return false;
     const routes = this.visualRoutes.length ? this.visualRoutes : [this.route];
-    let route = routes[0]!;
+    const orderedRoutes = [...routes].sort((a, b) => {
+      const exitA = this.positionOnRoute(a.length - 1, a); const exitB = this.positionOnRoute(b.length - 1, b);
+      return Math.hypot(exitA.x - center.x, exitA.y - center.y) - Math.hypot(exitB.x - center.x, exitB.y - center.y);
+    });
+    let route: Tile[] | undefined;
     let progress = 0;
-    let nearest = Number.POSITIVE_INFINITY;
-    const spawnAt = this.tileCenter(tile);
-    for (const candidate of routes) for (let index = 0; index < candidate.length; index += 1) {
-      const point = this.tileCenter(candidate[index]!);
-      const distance = Phaser.Math.Distance.Between(point.x, point.y, spawnAt.x, spawnAt.y);
-      if (distance < nearest) { nearest = distance; route = candidate; progress = index; }
+    for (const candidateRoute of orderedRoutes) {
+      const occupiedProgresses = this.boxTurrets.filter((turret) => turret.route === candidateRoute && turret.sprite)
+        .map((turret) => Math.round(turret.progress));
+      for (let candidateProgress = candidateRoute.length - 1; candidateProgress >= 0; candidateProgress -= 1) {
+        if (occupiedProgresses.includes(candidateProgress)) continue;
+        route = candidateRoute;
+        progress = candidateProgress;
+        break;
+      }
+      if (route) break;
     }
+    if (!route) return false;
+    const tile = route[Math.round(progress)]!;
     const fortified = !temporary && tower.ranks[2]! >= 6;
-    const turret: BoxTurret = { tile: route[Math.round(progress)]!, route, progress, hp: fortified ? 375 : 125,
+    const turret: BoxTurret = { tile, route, progress, hp: fortified ? 375 : 125,
       maxHp: fortified ? 375 : 125, armor: fortified ? 5 : 0, hyperarmor: fortified ? 0.1 : 0,
       attackTimer: 0, contactTimers: new Map(), rebuildAt: 0, tower, temporaryUntil: temporary ? this.simTime + 15 : 0 };
     this.createBoxTurretVisuals(turret);
@@ -2109,7 +2142,8 @@ export class GameScene extends Phaser.Scene {
         if (!occupied) positions.push({ route, progress, tile });
       }
     }
-    positions.sort((a, b) => a.progress - b.progress);
+    // Rebuilt turrets re-enter near the exit and travel toward the entrance.
+    positions.sort((a, b) => b.progress - a.progress);
     const spot = positions[0];
     if (!spot) return false;
     turret.route = spot.route; turret.progress = spot.progress; turret.tile = spot.tile;
