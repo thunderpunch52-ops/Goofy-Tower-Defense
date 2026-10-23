@@ -4,7 +4,7 @@ const path = (name: string, entries: Array<[string, string]>, costs: number[]): 
   name,
   tiers: entries.map(([upgradeName, description], index) => ({ rank: index + 1, name: upgradeName, description, cost: costs[index]! })),
 });
-const cardboardCosts = [192, 288, 480, 768, 1200, 1920, 5760];
+const cardboardCosts = [200, 300, 500, 800, 1200, 1950, 5800];
 const sodaCosts = [90, 140, 270, 360, 660, 880, 3520];
 const printerCosts = [140, 210, 410, 660, 1020, 1360, 4080];
 const clawCosts = [160, 240, 480, 770, 1200, 1920, 4800];
@@ -14,7 +14,7 @@ const trafficCosts = [250, 380, 750, 1000, 1850, 2450, 7350];
 
 export const ADDED_TOWERS: readonly TowerSpec[] = [
   {
-    id: 'cardboardFortress', name: 'Cardboard Fortress', rarity: 'Legendary', footprint: 4, cost: 1900,
+    id: 'cardboardFortress', name: 'Cardboard Fortress', rarity: 'Legendary', footprint: 4, cost: 2250,
     role: 'Base Support · Hybrid at combat-unit unlocks', damage: 0, attackRate: 0, range: 14, attackType: 'fortress', color: 0xc99155,
     paths: [
       path('Box Infantry', [
