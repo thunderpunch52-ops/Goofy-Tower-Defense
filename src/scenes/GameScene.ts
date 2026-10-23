@@ -1768,7 +1768,7 @@ export class GameScene extends Phaser.Scene {
     // Send reinforcements in a visible file from the exit toward the entrance.
     const routeGuards = this.boxGuards.filter((guard) => guard.tower === tower && guard.route === route).length;
     const progress = Math.max(0, route.length - 1 - routeGuards * 1.4);
-    const healthMultiplier = 1 + (tower.acquiredUpgrades.some((upgrade) => upgrade.name === 'Reinforced Tape') ? 0.05 : 0);
+    const healthMultiplier = 1.25 * (tower.acquiredUpgrades.some((upgrade) => upgrade.name === 'Reinforced Tape') ? 1.05 : 1);
     const maxHp = (heavy ? 180 : 120) * healthMultiplier;
     const shell = this.add.rectangle(0, 0, BOARD.cell * 1.7, BOARD.cell * 1.65, heavy ? 0xb96938 : 0xc99155, 1).setStrokeStyle(1.5, 0x402719, 1);
     const art = this.add.graphics();
@@ -1953,7 +1953,7 @@ export class GameScene extends Phaser.Scene {
       const shell = this.add.circle(0, 0, 4, 0x63dcff, 1).setStrokeStyle(1.3, 0xe4fbff, 1);
       const wing = this.add.ellipse(0, 0, 11, 3, 0xe7d8ac, 0.95);
       const sprite = this.addToBoard(this.add.container(0, 0, [wing, shell]).setDepth(6));
-      const droneHp = 80;
+      const droneHp = 100;
       const hpBarBack = this.addToBoard(this.add.rectangle(0, 0, BOARD.cell * 1.1, 2.2, 0x20252a, 0.95).setDepth(7));
       const hpBar = this.addToBoard(this.add.rectangle(0, 0, BOARD.cell * 1.1, 1.5, 0x7ce0a0, 1).setOrigin(0, 0.5).setDepth(8));
       this.boxDrones.push({ sprite, hpBarBack, hpBar, hp: droneHp, maxHp: droneHp, tower, attackTimer: Math.random() * 0.4, bombTimer: 8, temporaryUntil: normalDroneCount < desiredDrones ? 0 : temporaryUntil });
@@ -2073,8 +2073,8 @@ export class GameScene extends Phaser.Scene {
       if (distance < nearest) { nearest = distance; route = candidate; progress = index; }
     }
     const fortified = !temporary && tower.ranks[2]! >= 6;
-    const turret: BoxTurret = { tile: route[Math.round(progress)]!, route, progress, hp: fortified ? 300 : 100,
-      maxHp: fortified ? 300 : 100, armor: fortified ? 5 : 0, hyperarmor: fortified ? 0.1 : 0,
+    const turret: BoxTurret = { tile: route[Math.round(progress)]!, route, progress, hp: fortified ? 375 : 125,
+      maxHp: fortified ? 375 : 125, armor: fortified ? 5 : 0, hyperarmor: fortified ? 0.1 : 0,
       attackTimer: 0, contactTimers: new Map(), rebuildAt: 0, tower, temporaryUntil: temporary ? this.simTime + 15 : 0 };
     this.createBoxTurretVisuals(turret);
     const at = this.positionOnRoute(progress, route);
@@ -2113,7 +2113,7 @@ export class GameScene extends Phaser.Scene {
     const spot = positions[0];
     if (!spot) return false;
     turret.route = spot.route; turret.progress = spot.progress; turret.tile = spot.tile;
-    turret.maxHp = turret.tower.ranks[2]! >= 6 ? 300 : 100;
+    turret.maxHp = turret.tower.ranks[2]! >= 6 ? 375 : 125;
     turret.hp = turret.maxHp;
     turret.armor = turret.tower.ranks[2]! >= 6 ? 5 : 0;
     turret.hyperarmor = turret.tower.ranks[2]! >= 6 ? 0.1 : 0;
@@ -3904,7 +3904,7 @@ export class GameScene extends Phaser.Scene {
     tower.acquiredUpgrades.push(upgrade);
     if (tower.spec.id === 'cardboardFortress' && pathIndex === 0 && upgrade.rank === 1) {
       for (const guard of this.boxGuards.filter((unit) => unit.tower === tower)) {
-        const bonusHp = guard.maxHp * 0.05;
+        const bonusHp = guard.maxHp * (1.05 / 1.25 - 1);
         guard.maxHp += bonusHp;
         guard.hp += bonusHp;
       }
@@ -3924,8 +3924,8 @@ export class GameScene extends Phaser.Scene {
     }
     if (tower.spec.id === 'cardboardFortress' && pathIndex === 2 && upgrade.rank === 6) {
       for (const turret of this.boxTurrets.filter((unit) => unit.tower === tower && unit.temporaryUntil === 0)) {
-        turret.maxHp += 200;
-        turret.hp += 200;
+        turret.maxHp += 250;
+        turret.hp += 250;
         turret.armor = 5;
         turret.hyperarmor = 0.1;
         turret.statsLabel?.setText(`${Math.ceil(turret.hp)}/${turret.maxHp} · A${turret.armor} · H${Math.round(turret.hyperarmor * 100)}%`);

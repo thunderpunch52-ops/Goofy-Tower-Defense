@@ -4,7 +4,7 @@ const path = (name: string, entries: Array<[string, string]>, costs: number[]): 
   name,
   tiers: entries.map(([upgradeName, description], index) => ({ rank: index + 1, name: upgradeName, description, cost: costs[index]! })),
 });
-const cardboardCosts = [240, 360, 600, 960, 1500, 2400, 7200];
+const cardboardCosts = [192, 288, 480, 768, 1200, 1920, 5760];
 const sodaCosts = [90, 140, 270, 360, 660, 880, 3520];
 const printerCosts = [140, 210, 410, 660, 1020, 1360, 4080];
 const clawCosts = [160, 240, 480, 770, 1200, 1920, 4800];
@@ -14,29 +14,29 @@ const trafficCosts = [250, 380, 750, 1000, 1850, 2450, 7350];
 
 export const ADDED_TOWERS: readonly TowerSpec[] = [
   {
-    id: 'cardboardFortress', name: 'Cardboard Fortress', rarity: 'Legendary', footprint: 4, cost: 3100,
+    id: 'cardboardFortress', name: 'Cardboard Fortress', rarity: 'Legendary', footprint: 4, cost: 1900,
     role: 'Base Support · Hybrid at combat-unit unlocks', damage: 0, attackRate: 0, range: 14, attackType: 'fortress', color: 0xc99155,
     paths: [
       path('Box Infantry', [
         ['Reinforced Tape', '+5% summon health. Box Guards and Grunts march from the exit toward the entrance, then hold 3 route tiles ahead of the nearest enemy.'], ['Recycled Strength', '+10% summon attack damage once attacks unlock.'],
-        ['Cardboard Grunts', 'Deploy up to 4 visible, HP-tracked Grunts that march from the exit toward the entrance and hold 3 route tiles ahead of enemies. Each attacks for 25 physical damage per second. On enemy contact, it deals its remaining HP as collision damage and loses HP equal to the enemy’s remaining HP, reduced by its Armor.'],
+        ['Cardboard Grunts', 'Deploy up to 4 visible, HP-tracked Grunts (150 HP each before upgrades) that march from the exit toward the entrance and hold 3 route tiles ahead of enemies. Each attacks for 25 physical damage per second. On enemy contact, it deals its remaining HP as collision damage and loses HP equal to the enemy’s remaining HP, reduced by its Armor.'],
         ['Sharp Flaps', 'Slashes apply 5 physical damage per second for 3 seconds; same-source bleed refreshes and does not stack.'],
         ['Box Battalion', 'Increase the limit to 8. Moving Box Guards and Grunts gain +50% march speed.'],
         ['Armored Cartons', 'Summons gain +3 flat Armor.'],
-        ['Infinite Corrugated Army', 'For 25 seconds, deploy one visible, 180-HP Heavy Grunt every 2.5 seconds, up to 12. They march from exit toward entrance, deal 35 physical damage per second, and trade remaining HP on enemy contact. They despawn after the effect. Cooldown: 130 seconds.'],
+        ['Infinite Corrugated Army', 'For 25 seconds, deploy one visible, 225-HP Heavy Grunt every 2.5 seconds, up to 12. They march from exit toward entrance, deal 35 physical damage per second, and trade remaining HP on enemy contact. They despawn after the effect. Cooldown: 130 seconds.'],
       ], cardboardCosts),
       path('Delivery Drones', [
         ['Light Packaging', '+5% drone range.'], ['Air Mail', '+10% drone attack speed.'],
-        ['Drone Squadron', 'Maintain up to 3 drones. Each has 80 HP, moves at 2.5 tiles/second, shoots 40 physical damage at 1.5 shots/second, and has 10-tile range.'],
+        ['Drone Squadron', 'Maintain up to 3 drones. Each has 100 HP, moves at 2.5 tiles/second, shoots 40 physical damage at 1.5 shots/second, and has 10-tile range.'],
         ['Precision Targeting', 'Drones inherit First, Last, Weakest, or Strongest targeting.'], ['Heavy Cargo', 'Increase the limit to 6; darts can hit up to 2 targets along the shot.'],
         ['Bomb Droppers', 'Every 8 seconds, drones drop an 80-damage bomb with 1-tile splash at their selected target.'],
         ['Global Air Freight', 'For 20 seconds, raise the limit to 12 and fill temporary slots. Temporary drones vanish afterward; normal six remain. Cooldown: 150 seconds.'],
       ], cardboardCosts),
       path('Mech-Box Artillery', [
         ['Heavy Bolts', '+5% artillery damage.'], ['Sturdy Base', '+10% artillery range.'],
-        ['Deployable Turret', 'Deploy up to 2 mobile artillery turrets. Each starts with 100 HP, moves forward along the track until an enemy is within 16 tiles, then stops to attack for 120 physical damage at 0.5 shots per second. Enemies within 1 tile attack it once per second for their star-scaled Damage-to-Base value. Turrets do not block enemies.'],
+        ['Deployable Turret', 'Deploy up to 2 mobile artillery turrets. Each starts with 125 HP, moves forward along the track until an enemy is within 16 tiles, then stops to attack for 120 physical damage at 0.5 shots per second. Enemies within 1 tile attack it once per second for their star-scaled Damage-to-Base value. Turrets do not block enemies.'],
         ['Shockwave Impact', 'Impacts slow enemies within 1 tile by 25% for 2 seconds.'], ['Dual Cannons', 'Fire two 120-damage shells per attack, with a 2-second attack interval.'],
-        ['Fortified Bunkers', 'Permanent turrets gain +200 current and maximum HP (300 maximum total), 5 flat Armor, and 10% Hyperarmor; existing damage is preserved. Destroyed permanent turrets rebuild after 10 seconds at the nearest available route position to the entrance, retrying once per second if blocked. Temporary turrets do not rebuild.'],
+        ['Fortified Bunkers', 'Permanent turrets gain +250 current and maximum HP (375 maximum total), 5 flat Armor, and 10% Hyperarmor; existing damage is preserved. Destroyed permanent turrets rebuild after 10 seconds at the nearest available route position to the entrance, retrying once per second if blocked. Temporary turrets do not rebuild.'],
         ['Cardboard Artillery Matrix', 'For 15 seconds, allow 4 pieces, deploy up to 2 temporary pieces, and grant artillery map-wide range. Cooldown: 160 seconds.'],
       ], cardboardCosts),
     ],
