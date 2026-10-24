@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { ENEMIES, type EnemyKey } from '../game/content';
+import { ENDLESS_ELITES, endlessThreatForEnemy, type EndlessEliteId } from '../game/endless';
 import { TOWERS } from '../game/towers';
 import { exportProgressCode, importProgressCode, initializeProgress, saveTowerMastery, towerGemUnlockCost, towerMastery, towerUnlocked, towerUnlockRequirement, xpToEnterLevel } from '../state/progression';
 
@@ -8,11 +9,15 @@ const C = { ink: '#17152f', panel: '#201e40', panel2: '#2b2856', cream: '#fff5d7
 const RARITY_ORDER = ['Common', 'Rare', 'Epic', 'Legendary'] as const;
 const COLLECTION_TOWERS = [...TOWERS].sort((a, b) => RARITY_ORDER.indexOf(a.rarity) - RARITY_ORDER.indexOf(b.rarity));
 type Tab = 'mastery' | 'bestiary' | 'save';
+type BestiaryCategory = 'Normal' | 'Fast' | 'Strong' | 'Unique' | 'Boss' | 'Megaboss' | 'Elite Types';
+const BESTIARY_CATEGORIES: BestiaryCategory[] = ['Normal', 'Fast', 'Strong', 'Unique', 'Boss', 'Megaboss', 'Elite Types'];
 
 export class ProgressionScene extends Phaser.Scene {
   private tab: Tab = 'mastery';
   private selectedTower = 'angryPigeon';
   private selectedEnemy: EnemyKey = 'sock';
+  private bestiaryCategory: BestiaryCategory = 'Normal';
+  private selectedBestiaryElite: EndlessEliteId = 'midas';
   private tabObjects: Phaser.GameObjects.GameObject[] = [];
   private tabControls: Phaser.GameObjects.GameObject[] = [];
   private status?: Phaser.GameObjects.Text;
@@ -26,6 +31,9 @@ export class ProgressionScene extends Phaser.Scene {
   private towerScrollMax = 0;
   private enemyLabels: Phaser.GameObjects.Text[] = [];
   private enemyButtons: Phaser.GameObjects.Rectangle[] = [];
+  private eliteLabels: Phaser.GameObjects.Text[] = [];
+  private eliteButtons: Phaser.GameObjects.Rectangle[] = [];
+  private bestiaryCategoryButtons: Array<{ category: BestiaryCategory; button: Phaser.GameObjects.Rectangle }> = [];
   private pathButtons: Phaser.GameObjects.Rectangle[] = [];
   private pathLabels: Phaser.GameObjects.Text[] = [];
   private selectedMasteryPath?: number;
@@ -61,6 +69,11 @@ export class ProgressionScene extends Phaser.Scene {
     this.towerScrollMax = 0;
     this.enemyLabels.length = 0;
     this.enemyButtons.length = 0;
+    this.eliteLabels.length = 0;
+    this.eliteButtons.length = 0;
+    this.bestiaryCategoryButtons.length = 0;
+    this.bestiaryCategory = 'Normal';
+    this.selectedBestiaryElite = 'midas';
     this.pathButtons.length = 0;
     this.pathLabels.length = 0;
     this.status = undefined;
@@ -362,14 +375,33 @@ export class ProgressionScene extends Phaser.Scene {
   }
 
   private makeBestiaryPanel(): void {
-    this.add.text(58, 151, 'ENEMY FIELD GUIDE', { fontFamily: 'Arial', fontSize: '12px', color: C.gold, fontStyle: 'bold', letterSpacing: 2 }).setData('tab', 'bestiary');
+    this.add.text(58, 151, 'ENEMY FIELD GUIDE', { fontFamily: 'Arial', fontSize: '13px', color: C.gold, fontStyle: 'bold', letterSpacing: 2 }).setData('tab', 'bestiary');
+    BESTIARY_CATEGORIES.forEach((category, index) => {
+      const row = index < 4 ? 0 : 1;
+      const col = index < 4 ? index : index - 4;
+      const columns = row === 0 ? 4 : 3;
+      const buttonWidth = 122;
+      const gap = 6;
+      const left = row === 0 ? 51 : 40 + (545 - (columns * buttonWidth + (columns - 1) * gap)) / 2;
+      const x = left + col * (buttonWidth + gap);
+      const y = 181 + row * 31;
+      const button = this.add.rectangle(x + buttonWidth / 2, y + 12, buttonWidth, 24, 0x182733)
+        .setStrokeStyle(1, 0x526c75).setInteractive({ useHandCursor: true }).setData('tab', 'bestiary');
+      const label = this.add.text(x + buttonWidth / 2, y + 12, category.toUpperCase(), {
+        fontFamily: 'Arial', fontSize: '10px', color: C.cream, fontStyle: 'bold', letterSpacing: 0.5,
+      }).setOrigin(0.5).setData('tab', 'bestiary');
+      const select = () => this.selectBestiaryCategory(category);
+      button.on('pointerdown', select);
+      label.setInteractive({ useHandCursor: true }).on('pointerdown', select);
+      this.bestiaryCategoryButtons.push({ category, button });
+    });
     Object.keys(ENEMIES).forEach((id, index) => {
-      const col = index < 12 ? 0 : 1;
-      const row = index % 12;
+      const col = Math.floor(index / 6);
+      const row = index % 6;
       const x = 58 + col * 260;
-      const y = 184 + row * 39;
-      const button = this.add.rectangle(x + 118, y + 13, 232, 32, 0x182733).setStrokeStyle(1, 0x526c75).setInteractive({ useHandCursor: true }).setData('tab', 'bestiary');
-      const label = this.add.text(x + 11, y + 5, '', { fontFamily: 'Arial', fontSize: '12px', color: C.cream, fontStyle: 'bold', wordWrap: { width: 212 } }).setData('tab', 'bestiary');
+      const y = 244 + row * 58;
+      const button = this.add.rectangle(x + 118, y + 20, 232, 42, 0x182733).setStrokeStyle(1, 0x526c75).setInteractive({ useHandCursor: true }).setData('tab', 'bestiary');
+      const label = this.add.text(x + 11, y + 8, '', { fontFamily: 'Arial', fontSize: '12px', color: C.cream, fontStyle: 'bold', wordWrap: { width: 212 } }).setData('tab', 'bestiary');
       const select = () => { this.selectedEnemy = id as EnemyKey; this.updateBestiaryDetails(); };
       button.on('pointerdown', select);
       label.setInteractive({ useHandCursor: true }).on('pointerdown', select);
@@ -377,30 +409,107 @@ export class ProgressionScene extends Phaser.Scene {
       this.enemyLabels.push(label);
       this.tabObjects.push(button, label);
     });
+    ENDLESS_ELITES.forEach((elite, index) => {
+      const col = Math.floor(index / 4);
+      const row = index % 4;
+      const x = 58 + col * 260;
+      const y = 244 + row * 78;
+      const button = this.add.rectangle(x + 118, y + 27, 232, 58, 0x182733)
+        .setStrokeStyle(1, elite.color).setInteractive({ useHandCursor: true }).setData('tab', 'bestiary');
+      const label = this.add.text(x + 11, y + 10, '', {
+        fontFamily: 'Arial', fontSize: '11px', color: C.cream, fontStyle: 'bold', wordWrap: { width: 212 }, lineSpacing: 3,
+      }).setData('tab', 'bestiary');
+      const select = () => { this.selectedBestiaryElite = elite.id; this.updateBestiaryDetails(); };
+      button.on('pointerdown', select);
+      label.setInteractive({ useHandCursor: true }).on('pointerdown', select);
+      this.eliteButtons.push(button);
+      this.eliteLabels.push(label);
+      this.tabObjects.push(button, label);
+    });
     this.bestiaryDetail = this.add.text(632, 190, '', { fontFamily: 'Arial', fontSize: '17px', color: C.cream, lineSpacing: 9, wordWrap: { width: 570 } }).setData('tab', 'bestiary');
   }
 
+  private selectBestiaryCategory(category: BestiaryCategory): void {
+    this.bestiaryCategory = category;
+    if (category !== 'Elite Types') {
+      const entries = this.bestiaryEnemies(category);
+      if (!entries.includes(this.selectedEnemy) && entries[0]) this.selectedEnemy = entries[0];
+    }
+    this.updateBestiaryDetails();
+  }
+
+  private bestiaryEnemies(category: BestiaryCategory): EnemyKey[] {
+    return (Object.keys(ENEMIES) as EnemyKey[]).filter((id) => {
+      const enemy = ENEMIES[id];
+      if (enemy.ability === 'doomsdayClockworkGoliath' || enemy.ability === 'abyssalJunkHydra') return category === 'Megaboss';
+      if (enemy.boss) return category === 'Boss';
+      if (enemy.miniboss) return category === 'Strong';
+      const threat = endlessThreatForEnemy(id);
+      if (threat === 'Fast') return category === 'Fast';
+      if (threat === 'Heavy') return category === 'Strong';
+      if (threat === 'Unique') return category === 'Unique';
+      return category === 'Normal';
+    });
+  }
+
   private updateBestiaryDetails(): void {
+    this.refreshBestiaryCards();
+    if (this.bestiaryCategory === 'Elite Types') {
+      const elite = ENDLESS_ELITES.find((item) => item.id === this.selectedBestiaryElite) ?? ENDLESS_ELITES[0]!;
+      const color = `#${elite.color.toString(16).padStart(6, '0')}`;
+      this.bestiaryDetail?.setText(`${elite.name}\n\nELITE TYPE · ${elite.points} ENDLESS POINTS\n\n${elite.description}\n\nThis trait is purchased for one selected enemy. Traits can be stacked on the same enemy.`).setColor(color);
+      return;
+    }
     const enemy = ENEMIES[this.selectedEnemy];
     const unlocked = new Set(this.registry.get('bestiaryUnlocks') as EnemyKey[]).has(this.selectedEnemy);
-    this.refreshBestiaryCards();
+    this.bestiaryDetail?.setColor(C.cream);
     if (!unlocked) {
       const index = Object.keys(ENEMIES).indexOf(this.selectedEnemy);
       this.bestiaryDetail?.setText(`UNKNOWN ENTRY · ${index + 1}\n\nDefeat this enemy type in a run to add its name and stats to the Bestiary.`);
       return;
     }
-    this.bestiaryDetail?.setText(`${enemy.name}\n\nHealth: ${enemy.hp.toLocaleString()}\nSpeed: ${enemy.speed}\nArmor: ${enemy.armor}\nHyperarmor: ${enemy.hyperarmor}\nLeak damage: ${enemy.leak}\nBounty: ${enemy.bounty}\n${enemy.boss ? 'BOSS' : enemy.miniboss ? 'MINI-BOSS' : 'ENEMY'}${enemy.ability ? `\nAbility: ${enemy.ability}` : ''}`);
+    this.bestiaryDetail?.setText(`${enemy.name}\n\nHealth: ${enemy.hp.toLocaleString()}\nSpeed: ${enemy.speed}\nArmor: ${enemy.armor}\nHyperarmor: ${enemy.hyperarmor}\nLeak damage: ${enemy.leak}\nBounty: ${enemy.bounty}\n${enemy.boss ? 'BOSS' : enemy.miniboss ? 'STRONG · MINI-BOSS' : 'ENEMY'}${enemy.ability ? `\nAbility: ${enemy.ability}` : ''}`);
   }
 
   private refreshBestiaryCards(): void {
     const unlocked = new Set(this.registry.get('bestiaryUnlocks') as EnemyKey[]);
-    Object.entries(ENEMIES).forEach(([id, enemy], index) => {
+    this.bestiaryCategoryButtons.forEach(({ category, button }) => {
+      const selected = this.bestiaryCategory === category;
+      button.setFillStyle(selected ? 0x35336b : 0x182733)
+        .setStrokeStyle(selected ? 2 : 1, selected ? 0xffd15e : 0x526c75);
+    });
+    const visibleEnemies = this.bestiaryCategory === 'Elite Types' ? [] : this.bestiaryEnemies(this.bestiaryCategory);
+    Object.entries(ENEMIES).forEach(([id, enemy]) => {
+      const index = visibleEnemies.indexOf(id as EnemyKey);
+      const visible = index >= 0;
+      this.enemyButtons[Object.keys(ENEMIES).indexOf(id)]?.setVisible(visible);
+      this.enemyLabels[Object.keys(ENEMIES).indexOf(id)]?.setVisible(visible);
+      if (!visible) return;
+      const col = Math.floor(index / 6);
+      const row = index % 6;
+      const x = 58 + col * 260;
+      const y = 244 + row * 58;
+      this.enemyButtons[Object.keys(ENEMIES).indexOf(id)]?.setPosition(x + 118, y + 20);
+      this.enemyLabels[Object.keys(ENEMIES).indexOf(id)]?.setPosition(x + 11, y + 8);
       const isUnlocked = unlocked.has(id as EnemyKey);
       const selected = id === this.selectedEnemy;
-      this.enemyButtons[index]?.setFillStyle(selected ? 0x35336b : 0x182733)
+      this.enemyButtons[Object.keys(ENEMIES).indexOf(id)]?.setFillStyle(selected ? 0x35336b : 0x182733)
         .setStrokeStyle(selected ? 2 : 1, selected ? 0x63dcff : 0x526c75);
-      this.enemyLabels[index]?.setText(`${isUnlocked ? '◉' : '🔒'} ${isUnlocked ? enemy.name : 'Unknown enemy'}`)
+      this.enemyLabels[Object.keys(ENEMIES).indexOf(id)]?.setText(`${isUnlocked ? '◉' : '🔒'} ${isUnlocked ? enemy.name : 'Unknown enemy'}`)
         .setColor(unlocked.has(id as EnemyKey) ? C.cream : C.muted);
+    });
+    ENDLESS_ELITES.forEach((elite, index) => {
+      const visible = this.bestiaryCategory === 'Elite Types';
+      const col = Math.floor(index / 4);
+      const row = index % 4;
+      const x = 58 + col * 260;
+      const y = 244 + row * 78;
+      this.eliteButtons[index]?.setVisible(visible).setPosition(x + 118, y + 27)
+        .setFillStyle(this.selectedBestiaryElite === elite.id ? 0x35336b : 0x182733)
+        .setStrokeStyle(this.selectedBestiaryElite === elite.id ? 2 : 1, elite.color);
+      this.eliteLabels[index]?.setVisible(visible).setPosition(x + 11, y + 10)
+        .setText(`${elite.name}\n${elite.points} ENDLESS POINTS · ${elite.description}`)
+        .setColor(this.selectedBestiaryElite === elite.id ? C.cream : C.muted);
     });
   }
 

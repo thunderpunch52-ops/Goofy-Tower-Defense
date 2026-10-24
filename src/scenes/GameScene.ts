@@ -69,6 +69,7 @@ interface MiniRoomba { progress: number; route: Tile[]; direction: 1 | -1; speed
 interface BoxGuard { progress: number; route: Tile[]; hp: number; maxHp: number; armor: number; speed: number; stationed: boolean; attackTimer: number; contactTimers: Map<number, number>; sprite: Phaser.GameObjects.Container; hpBarBack: Phaser.GameObjects.Rectangle; hpBar: Phaser.GameObjects.Rectangle; tower: PlacedTower; heavy: boolean; despawnAt: number }
 interface BoxDrone { sprite: Phaser.GameObjects.Container; hpBarBack: Phaser.GameObjects.Rectangle; hpBar: Phaser.GameObjects.Rectangle; hp: number; maxHp: number; tower: PlacedTower; route: Tile[]; progress: number; speed: number; attackTimer: number; bombTimer: number; temporaryUntil: number }
 interface BoxTurret { tile: Tile; route: Tile[]; progress: number; sprite?: Phaser.GameObjects.Container; hpBarBack?: Phaser.GameObjects.Rectangle; hpBar?: Phaser.GameObjects.Rectangle; statsLabel?: Phaser.GameObjects.Text; hp: number; maxHp: number; armor: number; hyperarmor: number; attackTimer: number; contactTimers: Map<number, number>; rebuildAt: number; tower: PlacedTower; temporaryUntil: number }
+interface SelectedSummon { sprite: Phaser.GameObjects.Container | Phaser.GameObjects.Arc; inspect: () => string }
 interface PendingImpact { enemyId: number; tower: PlacedTower; damage: number; singleTargetHit: boolean; dueAt: number }
 interface RouteArrow { route: Tile[]; progress: number; elapsed: number; graphic: Phaser.GameObjects.Graphics }
 interface MegaHazard { route: Tile[]; progress: number; expiresAt: number; speedMultiplier: number; graphic: Phaser.GameObjects.Graphics }
@@ -150,6 +151,7 @@ export class GameScene extends Phaser.Scene {
   private placing = false;
   private selectedTower?: PlacedTower;
   private selectedEnemy?: ActiveEnemy;
+  private selectedSummon?: SelectedSummon;
   private paused = false;
   private speed = 1;
   private countdown = 3;
@@ -326,6 +328,7 @@ export class GameScene extends Phaser.Scene {
     this.placing = false;
     this.selectedTower = undefined;
     this.selectedEnemy = undefined;
+    this.selectedSummon = undefined;
     this.paused = false;
     this.speed = 1;
     this.countdown = 3;
@@ -505,6 +508,7 @@ export class GameScene extends Phaser.Scene {
     this.placing = true;
     this.selectedTower = undefined;
     this.selectedEnemy = undefined;
+    this.selectedSummon = undefined;
     this.pendingUpgrade = undefined;
     this.upgradeDetailsOpen = false;
     this.gridFeedback = this.mysteryPlacing ? 'PLACE MYSTERY BOX · FREE · TOWER REVEALED ON PLACEMENT' : `PLACE ${spec.name.toUpperCase()} · ${spec.footprint}×${spec.footprint}`;
@@ -670,7 +674,7 @@ export class GameScene extends Phaser.Scene {
       const tile = { x: Math.floor((point.x - BOARD.x) / BOARD.cell), y: Math.floor((point.y - BOARD.y) / BOARD.cell) };
       if (tile.x < 0 || tile.x >= BOARD_COLUMNS || tile.y < 0 || tile.y >= BOARD_ROWS) return;
       if (this.placing) this.placeTower(tile);
-      else if (!this.selectEnemyAt(point.x, point.y)) this.selectTower(tile);
+      else if (!this.selectSummonAt(point.x, point.y) && !this.selectEnemyAt(point.x, point.y)) this.selectTower(tile);
     });
     this.hudGraphics = this.addToBoard(this.add.graphics().setDepth(5));
   }
@@ -4305,6 +4309,7 @@ export class GameScene extends Phaser.Scene {
     this.pendingUpgrade = { tower: this.selectedTower, pathIndex };
     this.upgradeDetailsOpen = false;
     this.selectedEnemy = undefined;
+    this.selectedSummon = undefined;
     this.gridFeedback = '';
     this.updateHUD();
   }
@@ -4441,6 +4446,7 @@ export class GameScene extends Phaser.Scene {
     }
     this.selectedTower = tower;
     this.selectedEnemy = undefined;
+    this.selectedSummon = undefined;
     this.pendingUpgrade = undefined;
     this.upgradeDetailsOpen = false;
     this.gridFeedback = `${spec.name.toUpperCase()} PLACED`;
@@ -4449,9 +4455,10 @@ export class GameScene extends Phaser.Scene {
 
   private selectTower(tile: Tile): void {
     const tower = this.towerObjects.get(routeKey(tile));
-    if (!tower) { this.selectedTower = undefined; this.selectedEnemy = undefined; this.pendingUpgrade = undefined; this.upgradeDetailsOpen = false; this.updateHUD(); return; }
+    if (!tower) { this.selectedTower = undefined; this.selectedEnemy = undefined; this.selectedSummon = undefined; this.pendingUpgrade = undefined; this.upgradeDetailsOpen = false; this.updateHUD(); return; }
     this.selectedTower = tower;
     this.selectedEnemy = undefined;
+    this.selectedSummon = undefined;
     this.pendingUpgrade = undefined;
     this.upgradeDetailsOpen = false;
     this.gridFeedback = `${tower.spec.name.toUpperCase()} · ${tower.priority.toUpperCase()} TARGET`;
@@ -4472,10 +4479,45 @@ export class GameScene extends Phaser.Scene {
     if (!closest) return false;
     this.selectedEnemy = closest;
     this.selectedTower = undefined;
+    this.selectedSummon = undefined;
     this.pendingUpgrade = undefined;
     this.upgradeDetailsOpen = false;
     this.placing = false;
     this.gridFeedback = `${closest.spec.name} selected`;
+    this.updateHUD();
+    return true;
+  }
+
+  private selectSummonAt(x: number, y: number): boolean {
+    const candidates: SelectedSummon[] = [];
+    for (const tower of this.towers) tower.helperPigeons.forEach((bird, index) => candidates.push({ sprite: bird, inspect: () =>
+      `Pigeon Helper ${index + 1} · Owner ${tower.spec.name} · Attack ${Math.round(tower.spec.damage * tower.damageMultiplier * (tower.ranks[1]! >= 6 ? 1.5 : 1))} damage · Attacks every 1 sec · HP not applicable` }));
+    for (const gnome of this.miniGnomes) candidates.push({ sprite: gnome.sprite, inspect: () =>
+      `Track-running gnome · Owner ${gnome.tower.spec.name} · Speed ${gnome.speed} tiles/sec · Collision burst ${Math.round(gnome.tower.spec.damage * gnome.tower.damageMultiplier * 5)} damage · One pass per summon` });
+    for (const roomba of this.miniRoombas) candidates.push({ sprite: roomba.sprite, inspect: () =>
+      `${roomba.sweeper ? 'Roomba Sweeper' : 'Mini-Roomba'} · HP ${Math.max(0, Math.ceil(roomba.hp))}/200 · Speed ${roomba.speed} tiles/sec · ${roomba.sweeper ? 'Patrols and sweeps enemies on its lane' : 'Patrols the track and attacks nearby enemies'} · Owner ${roomba.tower.spec.name}` });
+    for (const guard of this.boxGuards) candidates.push({ sprite: guard.sprite, inspect: () =>
+      `${guard.heavy ? 'Heavy Grunt' : guard.tower.ranks[0]! >= 3 ? 'Box Infantry' : 'Box Guard'} · HP ${Math.max(0, Math.ceil(guard.hp))}/${Math.ceil(guard.maxHp)} · Armor ${guard.armor} · ${guard.heavy || guard.tower.ranks[0]! >= 3 ? `Attack ${guard.heavy ? 35 : 25} damage/sec` : 'Blocks and delays enemies'} · ${guard.stationed ? 'Holding position' : 'Marching toward entrance'} · Owner ${guard.tower.spec.name}` });
+    for (const drone of this.boxDrones) candidates.push({ sprite: drone.sprite, inspect: () =>
+      `Delivery Drone · HP ${Math.max(0, Math.ceil(drone.hp))}/${Math.ceil(drone.maxHp)} · Armor 0 · Range 10 tiles · Attack 40 damage at 1.5 shots/sec · ${drone.temporaryUntil > 0 ? 'Temporary drone' : 'Permanent drone'} · Owner ${drone.tower.spec.name}` });
+    for (const turret of this.boxTurrets) if (turret.sprite) candidates.push({ sprite: turret.sprite, inspect: () =>
+      `${turret.temporaryUntil > 0 ? 'Temporary' : 'Permanent'} Mech-Box Artillery · HP ${Math.max(0, Math.ceil(turret.hp))}/${Math.ceil(turret.maxHp)} · Armor ${turret.armor} · Hyperarmor ${Math.round(turret.hyperarmor * 100)}% · Damage 120 · Range 16 tiles · Owner ${turret.tower.spec.name}` });
+
+    let selected: SelectedSummon | undefined;
+    let closestDistance = Number.POSITIVE_INFINITY;
+    for (const summon of candidates) {
+      if (!summon.sprite.active) continue;
+      const distance = Phaser.Math.Distance.Between(x, y, summon.sprite.x, summon.sprite.y);
+      if (distance <= 9 && distance < closestDistance) { selected = summon; closestDistance = distance; }
+    }
+    if (!selected) return false;
+    this.selectedSummon = selected;
+    this.selectedEnemy = undefined;
+    this.selectedTower = undefined;
+    this.pendingUpgrade = undefined;
+    this.upgradeDetailsOpen = false;
+    this.placing = false;
+    this.gridFeedback = 'SUMMON SELECTED';
     this.updateHUD();
     return true;
   }
@@ -4801,6 +4843,13 @@ export class GameScene extends Phaser.Scene {
       this.upgradeConfirmLabel?.setVisible(false);
       this.upgradeDenyButton?.setVisible(false);
       this.upgradeDenyLabel?.setVisible(false);
+    } else if (this.selectedSummon && this.selectedSummon.sprite.active) {
+      this.bottomBarTitle?.setText('SUMMON INSPECTOR').setColor('#6fc8e8');
+      this.enemyInspectorLabel?.setText(this.selectedSummon.inspect());
+      this.upgradeConfirmButton?.setVisible(false);
+      this.upgradeConfirmLabel?.setVisible(false);
+      this.upgradeDenyButton?.setVisible(false);
+      this.upgradeDenyLabel?.setVisible(false);
     } else if (this.selectedEnemy) {
       const { spec, hp } = this.selectedEnemy;
       const effectiveArmor = spec.armor < 0 ? spec.armor : spec.armor * (1 - this.selectedEnemy.armorShred);
@@ -4829,6 +4878,7 @@ export class GameScene extends Phaser.Scene {
       this.upgradeDenyButton?.setVisible(false);
       this.upgradeDenyLabel?.setVisible(false);
     } else {
+      if (this.selectedSummon && !this.selectedSummon.sprite.active) this.selectedSummon = undefined;
       this.bottomBarTitle?.setText('ENEMY INSPECTOR').setColor('#6fc8e8');
       this.enemyInspectorLabel?.setText('Click an enemy on the board to inspect its stats.');
       this.upgradeConfirmButton?.setVisible(false);
