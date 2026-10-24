@@ -508,7 +508,7 @@ export class ProgressionScene extends Phaser.Scene {
         .setFillStyle(this.selectedBestiaryElite === elite.id ? 0x35336b : 0x182733)
         .setStrokeStyle(this.selectedBestiaryElite === elite.id ? 2 : 1, elite.color);
       this.eliteLabels[index]?.setVisible(visible).setPosition(x + 11, y + 10)
-        .setText(`${elite.name}\n${elite.points} ENDLESS POINTS · ${elite.description}`)
+        .setText(elite.name)
         .setColor(this.selectedBestiaryElite === elite.id ? C.cream : C.muted);
     });
   }
