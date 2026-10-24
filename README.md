@@ -2,6 +2,22 @@
 
 A desktop browser tower defense prototype built with Phaser and TypeScript. The playable campaign has five stages and three star difficulties, using the documented wave schedule, maps, stage locks, first-clear rewards, Stage 4 Mystery Box, and Stage 5 mutation events. Progress is held in page memory; export a save code from the lobby's progression screen to carry it across reloads.
 
+## Run locally on Windows PowerShell
+
+The commands below use the Node.js runtime bundled with Codex, so they work even when `node` is not installed on the Windows system PATH.
+
+```powershell
+Set-Location 'C:\Users\alons\OneDrive\Documents\ChatGPT\TD game 2'
+$env:Path = 'C:\Users\alons\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin;' + $env:Path
+& 'C:\Users\alons\.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\fallback\pnpm.cmd' dev --host 127.0.0.1
+```
+
+Leave that PowerShell window running, then open [http://localhost:5173/](http://localhost:5173/) in desktop Chrome. Vite refreshes the page when the source changes. Press **Ctrl+C** in PowerShell to stop the server. If dependencies are missing, run this after setting the PATH line above:
+
+```powershell
+& 'C:\Users\alons\.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\fallback\pnpm.cmd' install
+```
+
 ## Play the campaign
 
 1. In the lobby, choose an unlocked **Stage** and **Star**, then click **Start New Run**. Stages unlock in order within a star tier. Stages 1–3 have 5, 10, and 15 waves; Stage 4 has 10 waves at Stars 1–2 and 15 at Star 3; Stage 5 has 15 waves. Each stage uses its assigned map. Wave 1 starts after a short countdown, and you begin with $450.
