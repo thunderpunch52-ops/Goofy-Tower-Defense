@@ -2,7 +2,7 @@ import Phaser from 'phaser';
 import { ENEMIES, STAGE_ONE_WAVES, WAVE_EVENT_NAMES, normalizeStar, starScaledBounty, starScaledHp, starScaledLeak, waveClearPayout, type EnemyKey, type EnemySpec, type WaveGroup } from '../game/content';
 import { BOARD_COLUMNS, BOARD_ROWS, CAMPAIGN_MAPS, createMapRoute, getMap, getMapObstacles, MAPS, routeKey, widenRouteTiles, type MapId, type MapObstacle, type Tile } from '../game/map';
 import { TOWERS, type TowerSpec, type UpgradeTier } from '../game/towers';
-import { ENDLESS_ELITES, ENDLESS_MEGA_BOSS_COST, endlessBloodPactStages, endlessBountyMultiplier, endlessEliteSpec, endlessEliteStats, endlessHermesCrowdControlCharges, endlessHpMultiplier, endlessLeakDamage, endlessEnemyPointCost, endlessEnemyRosterCost, endlessMegaBossDamageLimit, endlessMegaBossShield, endlessSiphonSlowPerHit, endlessThreatForEnemy, endlessWaveBudget, endlessWaveEnemyBudget, generateEndlessWave, type EndlessEliteId, type EndlessThreat } from '../game/endless';
+import { ENDLESS_ELITES, ENDLESS_MEGA_BOSS_COST, endlessBloodPactStages, endlessBountyMultiplier, endlessEliteSpec, endlessEliteStats, endlessHermesCrowdControlCharges, endlessHpMultiplier, endlessLeakDamage, endlessEnemyRosterCost, endlessMegaBossDamageLimit, endlessMegaBossShield, endlessSiphonSlowPerHit, endlessThreatForEnemy, endlessWaveBudget, endlessWaveEnemyBudget, generateEndlessWave, type EndlessEliteId, type EndlessThreat } from '../game/endless';
 import { createRunSession } from '../state/runSession';
 import { grantPlayerXp, grantTowerXp, initializeProgress, towerMastery, towerUnlocked, unlockBestiaryEntry } from '../state/progression';
 
@@ -159,12 +159,8 @@ export class GameScene extends Phaser.Scene {
   private lastWavePayout = 0;
   private waveGroups: WaveGroup[] = [];
   private endlessAssignments = new Map<number, EndlessEliteId[]>();
-  private endlessBudgetRemaining = 0;
-  private endlessTargetIndex = 0;
   private endlessSpawnedCount = 0;
-  private endlessPrepOpen = false;
   private endlessReverseGearsUsed = false;
-  private endlessPrepObjects: Phaser.GameObjects.GameObject[] = [];
   private groupIndex = 0;
   private groupRemaining = 0;
   private groupDelayStarted = false;
@@ -298,11 +294,7 @@ export class GameScene extends Phaser.Scene {
     this.towerStunUntil = 0;
     this.modifierChoiceOpen = false;
     this.modifierOverlayObjects.length = 0;
-    this.endlessPrepObjects.splice(0).forEach((object) => object.destroy());
-    this.endlessPrepOpen = false;
     this.endlessAssignments.clear();
-    this.endlessBudgetRemaining = 0;
-    this.endlessTargetIndex = 0;
     this.endlessSpawnedCount = 0;
     this.endlessReverseGearsUsed = false;
     this.megaHazards.splice(0).forEach((hazard) => hazard.graphic.destroy());
@@ -1204,7 +1196,6 @@ export class GameScene extends Phaser.Scene {
     this.skipCooldown = Math.max(0, this.skipCooldown - dt);
     this.stepPendingImpacts();
     if (this.phase === 'countdown') {
-      if (this.endlessPrepOpen) return;
       this.countdown -= dt;
       if (this.countdown <= 0) {
         this.phase = 'wave';
@@ -1265,14 +1256,11 @@ export class GameScene extends Phaser.Scene {
     this.run.wave = number;
     this.endlessAssignments.clear();
     this.endlessSpawnedCount = 0;
-    this.endlessTargetIndex = 0;
     if (this.endlessMode && number > STAGE_ONE_WAVES.length) {
-      const totalBudget = endlessWaveBudget(number);
       this.waveGroups = generateEndlessWave(number, Math.random, endlessWaveEnemyBudget(number));
-      this.endlessBudgetRemaining = Math.max(0, totalBudget - endlessEnemyRosterCost(this.waveGroups));
+      this.allocateEndlessWaveBudget(number);
     } else {
       this.waveGroups = number <= STAGE_ONE_WAVES.length ? STAGE_ONE_WAVES[number - 1]! : generateEndlessWave(number);
-      this.endlessBudgetRemaining = 0;
     }
     this.groupIndex = 0;
     this.groupRemaining = 0;
@@ -1292,102 +1280,53 @@ export class GameScene extends Phaser.Scene {
     const endlessModifierWave = this.endlessMode && this.endlessModifiersEnabled && number >= 5 && number % 5 === 0 && number % 20 !== 0;
     const stageFiveModifierWave = !this.endlessMode && !this.mapPreview && this.campaignStage === 5 && [5, 10, 15].includes(number);
     if (endlessModifierWave || stageFiveModifierWave) this.showModifierChoice();
-    else if (this.endlessMode && number > STAGE_ONE_WAVES.length) this.showEndlessPrep();
   }
 
-  private endlessTarget(): { enemy: EnemyKey; localIndex: number; globalIndex: number } | undefined {
-    let remaining = this.endlessTargetIndex;
-    for (const group of this.waveGroups) {
-      if (remaining < group.count) return { enemy: group.enemy, localIndex: remaining, globalIndex: this.endlessTargetIndex };
-      remaining -= group.count;
+  private allocateEndlessWaveBudget(wave: number): void {
+    let remaining = Math.max(0, endlessWaveBudget(wave) - endlessEnemyRosterCost(this.waveGroups));
+    const random = Math.random;
+
+    // The sender may spend a large late-wave reserve on one mega boss. Their
+    // appearance is an AI composition choice, never a player purchase.
+    const megaBossChance = Math.min(0.45, 0.08 + Math.max(0, wave - 26) * 0.025);
+    if (wave >= 27 && remaining >= ENDLESS_MEGA_BOSS_COST && random() < megaBossChance) {
+      const enemy: EnemyKey = random() < 0.5 ? 'doomsdayClockworkGoliath' : 'abyssalJunkHydra';
+      this.waveGroups.push({ enemy, count: 1 });
+      remaining -= ENDLESS_MEGA_BOSS_COST;
     }
-    return undefined;
-  }
 
-  private clearEndlessPrep(): void {
-    this.endlessPrepObjects.splice(0).forEach((object) => object.destroy());
-  }
-
-  private showEndlessPrep(): void {
-    this.endlessPrepOpen = true;
-    this.clearEndlessPrep();
-    const add = <T extends Phaser.GameObjects.GameObject & { setDepth(value: number): T }>(object: T): T => {
-      object.setDepth(50);
-      this.endlessPrepObjects.push(object);
-      return object;
-    };
-    const backdrop = add(this.add.rectangle(W / 2, H / 2, W, H, 0x080914, 0.9).setInteractive());
-    const panel = add(this.add.rectangle(W / 2, H / 2, 970, 640, 0x292750).setStrokeStyle(3, 0x63dcff));
-    add(this.add.text(W / 2, 70, `ENDLESS ELITE DEPLOYMENT · WAVE ${this.wave}`, { fontFamily: 'Arial', fontSize: '25px', color: '#fff5d7', fontStyle: 'bold', letterSpacing: 1 }).setOrigin(0.5));
-    add(this.add.text(W / 2, 104, `SHARED WAVE BUDGET · ${endlessWaveBudget(this.wave)} TOTAL · ${this.endlessBudgetRemaining} LEFT`, { fontFamily: 'Arial', fontSize: '15px', color: '#a9e7c2', fontStyle: 'bold' }).setOrigin(0.5));
-    const target = this.endlessTarget();
-    const assigned = target ? (this.endlessAssignments.get(target.globalIndex) ?? []) : [];
-    const unitLabel = add(this.add.text(W / 2, 144,
-      target ? `TARGET ${target.globalIndex + 1} / ${this.waveGroups.reduce((sum, group) => sum + group.count, 0)} · ${ENEMIES[target.enemy]!.name} · ELITES: ${assigned.map((id) => endlessEliteSpec(id).name).join(', ') || 'NONE'}` : 'No regular enemies remain in this wave.',
-      { fontFamily: 'Arial', fontSize: '13px', color: '#fff5d7', align: 'center', wordWrap: { width: 840 } }).setOrigin(0.5));
-    const remaining = add(this.add.text(W / 2, 170, `AVAILABLE POINTS: ${this.endlessBudgetRemaining}`, { fontFamily: 'Arial', fontSize: '18px', color: '#ffd15e', fontStyle: 'bold' }).setOrigin(0.5));
-    const navButton = (x: number, label: string, offset: number) => {
-      const button = add(this.add.rectangle(x, 144, 74, 28, 0x263b4a).setStrokeStyle(1, 0x63dcff).setInteractive({ useHandCursor: true }));
-      const text = add(this.add.text(x, 144, label, { fontFamily: 'Arial', fontSize: '11px', color: '#fff5d7', fontStyle: 'bold' }).setOrigin(0.5).setInteractive({ useHandCursor: true }));
-      const change = () => {
-        const total = this.waveGroups.reduce((sum, group) => sum + group.count, 0);
-        this.endlessTargetIndex = Math.max(0, Math.min(Math.max(0, total - 1), this.endlessTargetIndex + offset));
-        this.showEndlessPrep();
-      };
-      button.on('pointerdown', change); text.on('pointerdown', change);
-    };
-    navButton(184, '‹ ENEMY', -1); navButton(1096, 'ENEMY ›', 1);
-    const cardW = 426; const cardH = 88;
-    ENDLESS_ELITES.forEach((elite, index) => {
-      const column = index % 2; const row = Math.floor(index / 2);
-      const x = 420 + column * 440; const y = 242 + row * 95;
-      const canBuy = Boolean(target && this.endlessBudgetRemaining >= elite.points);
-      const card = add(this.add.rectangle(x, y, cardW, cardH, canBuy ? 0x202c46 : 0x201e40).setStrokeStyle(2, elite.color, canBuy ? 0.95 : 0.45).setInteractive({ useHandCursor: canBuy }));
-      const title = add(this.add.text(x - 198, y - 27, `${elite.name.toUpperCase()}  ·  ${elite.points} PTS`, { fontFamily: 'Arial', fontSize: '13px', color: `#${elite.color.toString(16).padStart(6, '0')}`, fontStyle: 'bold' }));
-      const description = add(this.add.text(x - 198, y - 4, elite.description, { fontFamily: 'Arial', fontSize: '11px', color: '#e5e2f4', wordWrap: { width: 305 } }));
-      const buy = add(this.add.text(x + 153, y + 24, `BUY ×${elite.points}`, { fontFamily: 'Arial', fontSize: '12px', color: canBuy ? '#a9e7c2' : '#8887a2', fontStyle: 'bold' }).setOrigin(0.5).setInteractive({ useHandCursor: canBuy }));
-      const purchase = () => {
-        if (!target || this.endlessBudgetRemaining < elite.points) return;
-        this.endlessBudgetRemaining -= elite.points;
-        const loadout = this.endlessAssignments.get(target.globalIndex) ?? [];
-        loadout.push(elite.id);
-        this.endlessAssignments.set(target.globalIndex, loadout);
-        this.showEndlessPrep();
-      };
-      card.on('pointerdown', purchase); buy.on('pointerdown', purchase); title.setInteractive({ useHandCursor: canBuy }).on('pointerdown', purchase); description.setInteractive({ useHandCursor: canBuy }).on('pointerdown', purchase);
-    });
-    const megaBosses: Array<{ enemy: EnemyKey; title: string; detail: string; color: number }> = [
-      { enemy: 'doomsdayClockworkGoliath', title: 'DOOMSDAY CLOCKWORK GOLIATH', detail: '60,000 HP · brass clockwork titan · tower-disabling phases', color: 0xd2a448 },
-      { enemy: 'abyssalJunkHydra', title: 'ABYSSAL JUNK-HYDRA', detail: '75,000 HP · three scrap heads · shield, hazards, beam', color: 0x9d68ef },
-    ];
-    megaBosses.forEach((boss, index) => {
-      const x = 420 + index * 440; const y = 604;
-      const canBuy = this.endlessBudgetRemaining >= ENDLESS_MEGA_BOSS_COST;
-      const card = add(this.add.rectangle(x, y, 426, 55, canBuy ? 0x302b44 : 0x201e40).setStrokeStyle(2, boss.color, canBuy ? 1 : 0.45).setInteractive({ useHandCursor: canBuy }));
-      add(this.add.text(x - 200, y - 18, `${boss.title} · ${ENDLESS_MEGA_BOSS_COST} PTS`, { fontFamily: 'Arial', fontSize: '12px', color: `#${boss.color.toString(16).padStart(6, '0')}`, fontStyle: 'bold' }));
-      const detail = add(this.add.text(x - 200, y + 3, boss.detail, { fontFamily: 'Arial', fontSize: '10px', color: '#e5e2f4', wordWrap: { width: 310 } }));
-      const buy = add(this.add.text(x + 160, y + 12, 'ADD', { fontFamily: 'Arial', fontSize: '12px', color: canBuy ? '#a9e7c2' : '#8887a2', fontStyle: 'bold' }).setOrigin(0.5).setInteractive({ useHandCursor: canBuy }));
-      const purchase = () => {
-        if (this.endlessBudgetRemaining < ENDLESS_MEGA_BOSS_COST) return;
-        const targetIndex = this.waveGroups.reduce((sum, group) => sum + group.count, 0);
-        this.endlessBudgetRemaining -= endlessEnemyPointCost(boss.enemy);
-        this.waveGroups.push({ enemy: boss.enemy, count: 1 });
-        this.endlessTargetIndex = targetIndex;
-        this.showEndlessPrep();
-      };
-      card.on('pointerdown', purchase); buy.on('pointerdown', purchase); detail.setInteractive({ useHandCursor: canBuy }).on('pointerdown', purchase);
-    });
-    const start = add(this.add.rectangle(W / 2, 662, 300, 34, 0x31584d).setStrokeStyle(2, 0xa9e7c2).setInteractive({ useHandCursor: true }));
-    const startLabel = add(this.add.text(W / 2, 662, 'START WAVE', { fontFamily: 'Arial', fontSize: '14px', color: '#ffffff', fontStyle: 'bold', letterSpacing: 1 }).setOrigin(0.5).setInteractive({ useHandCursor: true }));
-    const begin = () => {
-      this.clearEndlessPrep(); this.endlessPrepOpen = false;
-      this.countdown = 2;
-      this.gridFeedback = 'ELITES LOCKED IN · WAVE STARTING';
-    };
-    start.on('pointerdown', begin); startLabel.on('pointerdown', begin);
-    // Keep the key HUD labels above the modal for accessible point feedback.
-    remaining.setText(`AVAILABLE POINTS: ${this.endlessBudgetRemaining}`);
-    void backdrop; void panel; void unitLabel;
+    // Treat each queued enemy as an independent target. This allows a batch
+    // such as ten scooters to contain both elite and ordinary scooters.
+    const targetCount = this.waveGroups.reduce((sum, group) => sum + group.count, 0);
+    const order = Array.from({ length: targetCount }, (_, index) => index);
+    for (let index = order.length - 1; index > 0; index -= 1) {
+      const swap = Math.floor(random() * (index + 1));
+      [order[index], order[swap]] = [order[swap]!, order[index]!];
+    }
+    let targetIndex = 0;
+    for (const group of this.waveGroups) {
+      for (let local = 0; local < group.count; local += 1) {
+        const globalIndex = targetIndex++;
+        const eliteOrder = [...ENDLESS_ELITES].sort((a, b) => a.points - b.points);
+        const eligible = eliteOrder.filter((elite) => elite.points <= remaining);
+        if (!eligible.length) continue;
+        // One elite per target on the first pass produces readable mixed
+        // groups; leftover budget can add extra stacked traits afterward.
+        const target = order[globalIndex] ?? globalIndex;
+        const elite = eligible[Math.floor(random() * eligible.length)]!;
+        this.endlessAssignments.set(target, [elite.id]);
+        remaining -= elite.points;
+      }
+    }
+    while (remaining >= Math.min(...ENDLESS_ELITES.map((elite) => elite.points)) && targetCount > 0) {
+      const eligible = ENDLESS_ELITES.filter((elite) => elite.points <= remaining);
+      const elite = eligible[Math.floor(random() * eligible.length)]!;
+      const target = Math.floor(random() * targetCount);
+      const loadout = this.endlessAssignments.get(target) ?? [];
+      loadout.push(elite.id);
+      this.endlessAssignments.set(target, loadout);
+      remaining -= elite.points;
+    }
   }
 
   private stepSpawning(dt: number): void {
@@ -3597,7 +3536,6 @@ export class GameScene extends Phaser.Scene {
     const choices = eligible.slice(0, 3);
     if (choices.length === 0) {
       this.modifierChoiceOpen = false;
-      if (this.endlessMode && this.wave > STAGE_ONE_WAVES.length) this.showEndlessPrep();
       return;
     }
     const background = this.add.rectangle(W / 2, H / 2, W, H, 0x071016, 0.84).setDepth(40).setInteractive();
@@ -3645,7 +3583,6 @@ export class GameScene extends Phaser.Scene {
       ? `${choice.name.toUpperCase()} APPLIED · FORCED: ${forcedBonus.name.toUpperCase()}`
       : `${choice.name.toUpperCase()} APPLIED`;
     this.updateHUD();
-    if (this.endlessMode && this.wave > STAGE_ONE_WAVES.length) this.showEndlessPrep();
   }
 
   private applyMutation(choice: CampaignMutation): void {

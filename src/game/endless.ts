@@ -74,10 +74,8 @@ export function endlessMegaBossDamageLimit(hp: number, maxHp: number, phase: 1 |
 export function endlessMegaBossShield(maxHp: number): number { return Math.floor(Math.max(0, maxHp) * 0.1); }
 
 export function endlessWaveEnemyBudget(wave: number): number {
-  // Keep the regular roster compact so the first Endless wave can afford its
-  // cheapest selectable elite; both sides still draw from the same total pool.
-  // Reserve most of the wave's shared point pool for player-purchased elites and
-  // mega bosses; ordinary enemies and upgrades still share one total budget.
+  // Keep the regular roster compact so the automatic wave sender can spend the
+  // rest of the shared budget on per-enemy elites and occasional mega bosses.
   return Math.floor(endlessWaveBudget(wave) * 0.4);
 }
 
