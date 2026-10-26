@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { MAPS, type MapId } from '../game/map';
+import { BOARD_COLUMNS, BOARD_ROWS, CAMPAIGN_MAPS, createMapRoute, MAPS, type MapId } from '../game/map';
 import { initializeProgress } from '../state/progression';
 
 const W = 1280;
@@ -222,7 +222,7 @@ export class LobbyScene extends Phaser.Scene {
     const modeTitle = this.add.text(640, 91, 'PICK YOUR ADVENTURE', { fontFamily: 'Trebuchet MS', fontSize: '25px', color: C.mint, fontStyle: 'bold', letterSpacing: 2 }).setOrigin(0.5).setDepth(21);
     const modeHint = this.add.text(640, 130, 'Three ways to make a mess of the enemy plan.', { fontFamily: 'Arial', fontSize: '15px', color: C.muted }).setOrigin(0.5).setDepth(21);
     const modeButtons: Array<Phaser.GameObjects.Rectangle | Phaser.GameObjects.Text> = [];
-    const setupObjects: Array<Phaser.GameObjects.Rectangle | Phaser.GameObjects.Text> = [];
+    const setupObjects: Array<Phaser.GameObjects.Rectangle | Phaser.GameObjects.Text | Phaser.GameObjects.Graphics> = [];
     const hideSetup = () => { setupObjects.forEach((object) => object.setVisible(false)); modeButtons.forEach((object) => object.setVisible(true)); modeTitle.setText('PICK YOUR ADVENTURE'); modeHint.setText('Three ways to make a mess of the enemy plan.'); };
     const addModeCard = (y: number, title: string, detail: string, color: string, open: () => void) => {
       const bg = this.add.rectangle(640, y, 500, 132, 0x201e40).setStrokeStyle(2, Phaser.Display.Color.HexStringToColor(color).color).setDepth(21).setInteractive({ useHandCursor: true });
@@ -230,12 +230,12 @@ export class LobbyScene extends Phaser.Scene {
       const desc = this.add.text(640, y + 24, detail, { fontFamily: 'Arial', fontSize: '14px', color: C.muted, align: 'center', wordWrap: { width: 455 } }).setOrigin(0.5).setDepth(22);
       [bg, name, desc].forEach((object) => { modeButtons.push(object); object.setInteractive({ useHandCursor: true }).on('pointerdown', open); });
     };
-    const setupHeader = (heading: string, subtitle: string) => {
+    const setupHeader = (heading: string, subtitle: string, backAction: () => void = hideSetup) => {
       modeButtons.forEach((object) => object.setVisible(false));
       modeTitle.setText(heading); modeHint.setText(subtitle);
       const back = this.add.rectangle(415, 91, 90, 34, 0x2b2856).setStrokeStyle(1, 0x63dcff).setDepth(23).setInteractive({ useHandCursor: true });
       const backText = this.add.text(415, 91, '‹ BACK', { fontFamily: 'Arial', fontSize: '13px', color: C.cream, fontStyle: 'bold' }).setOrigin(0.5).setDepth(24).setInteractive({ useHandCursor: true });
-      back.on('pointerdown', hideSetup); backText.on('pointerdown', hideSetup); setupObjects.push(back, backText);
+      back.on('pointerdown', backAction); backText.on('pointerdown', backAction); setupObjects.push(back, backText);
     };
     const setupButton = (x: number, y: number, width: number, label: string, color: number, callback: () => void) => {
       const bg = this.add.rectangle(x, y, width, 48, color).setStrokeStyle(1, 0xfff5d7).setDepth(23).setInteractive({ useHandCursor: true });
@@ -281,14 +281,115 @@ export class LobbyScene extends Phaser.Scene {
     addModeCard(390, 'DRAFT', 'Choose a fresh tower roster as the run unfolds.', C.blue, () => {
       setupHeader('DRAFT MODE', 'Draft three starter towers. New picks arrive as you clear waves.');
       setupButton(640, 290, 420, 'STANDARD DRAFT CAMPAIGN  ·  15 WAVES', 0x315b60, () => launch('draft-campaign', { draftRoster: [] }));
-      setupButton(640, 370, 420, 'DRAFT ENDLESS  ·  KEEP DRAFTING', 0x315b60, () => launch('draft-endless', { draftRoster: [] }));
-      const note = this.add.text(640, 455, 'Three starter picks · bonus picks at Waves 5 and 10\nEndless keeps offering a new tower every five waves.', { fontFamily: 'Arial', fontSize: '15px', color: C.muted, align: 'center', lineSpacing: 9 }).setOrigin(0.5).setDepth(22); setupObjects.push(note);
+      const standardInfo = this.add.text(640, 329, 'Pick 3 starter towers, then draft after Waves 5 and 10.\nFirst clear: +10 gems and +500 Player XP.', { fontFamily: 'Arial', fontSize: '12px', color: C.muted, align: 'center', lineSpacing: 4, wordWrap: { width: 470 } }).setOrigin(0.5).setDepth(22); setupObjects.push(standardInfo);
+      setupButton(640, 390, 420, 'DRAFT ENDLESS  ·  KEEP DRAFTING', 0x315b60, () => launch('draft-endless', { draftRoster: [] }));
+      const endlessInfo = this.add.text(640, 429, 'Pick 3 starters; draft at Waves 5, 10, 15, then every 5 waves.\nAfter 6 towers, replace one or skip for $500.', { fontFamily: 'Arial', fontSize: '12px', color: C.muted, align: 'center', lineSpacing: 4, wordWrap: { width: 470 } }).setOrigin(0.5).setDepth(22); setupObjects.push(endlessInfo);
+      const note = this.add.text(640, 493, 'Drafted tower types stay available for the rest of the run.\nEndless gives the usual endless XP and gem rewards.', { fontFamily: 'Arial', fontSize: '13px', color: C.muted, align: 'center', lineSpacing: 6 }).setOrigin(0.5).setDepth(22); setupObjects.push(note);
     });
     addModeCard(548, 'TOWER ODYSSEY', 'Travel through connected maps. Heal, prepare, or extract between nodes.', C.gold, () => {
-      setupHeader('TOWER ODYSSEY', 'Your base health and choices carry across every map.');
-      setupButton(640, 290, 420, 'MINI ODYSSEY  ·  3 MAPS', 0x315b60, () => launch('odyssey', { odysseyLength: 3 }));
-      setupButton(640, 370, 420, 'GRAND ODYSSEY  ·  5 MAPS', 0x315b60, () => launch('odyssey', { odysseyLength: 5 }));
-      const note = this.add.text(640, 455, 'Rewards stay in a vault until you extract or finish.\nA wipeout loses the vault; extraction keeps 75%.', { fontFamily: 'Arial', fontSize: '15px', color: C.muted, align: 'center', lineSpacing: 9 }).setOrigin(0.5).setDepth(22); setupObjects.push(note);
+      const clearSetup = () => setupObjects.forEach((object) => object.setVisible(false));
+      const showLengthPicker = () => {
+        clearSetup();
+        setupHeader('TOWER ODYSSEY', 'Your base health and choices carry across every map.');
+        setupButton(640, 290, 420, 'MINI ODYSSEY  ·  3 MAPS', 0x315b60, () => showRoutePreview(3));
+        const miniInfo = this.add.text(640, 329, '3 maps: Beginner, Advanced, then Expert.\nClear all 3 for +15 gems and +1,000 Player XP.', { fontFamily: 'Arial', fontSize: '12px', color: C.muted, align: 'center', lineSpacing: 4, wordWrap: { width: 470 } }).setOrigin(0.5).setDepth(22); setupObjects.push(miniInfo);
+        setupButton(640, 390, 420, 'GRAND ODYSSEY  ·  5 MAPS', 0x315b60, () => showRoutePreview(5));
+        const grandInfo = this.add.text(640, 429, '5 maps with rising wave counts and route choices.\nClear all 5 for +40 gems and +2,500 Player XP.', { fontFamily: 'Arial', fontSize: '12px', color: C.muted, align: 'center', lineSpacing: 4, wordWrap: { width: 470 } }).setOrigin(0.5).setDepth(22); setupObjects.push(grandInfo);
+        const note = this.add.text(640, 493, 'Between maps, heal, spend gems on a one-map buff, or scout.\nExtract to keep 75% of your vault; a wipeout loses it.', { fontFamily: 'Arial', fontSize: '13px', color: C.muted, align: 'center', lineSpacing: 6 }).setOrigin(0.5).setDepth(22); setupObjects.push(note);
+      };
+      const showRoutePreview = (length: number) => {
+        const count = length === 5 ? 5 : 3;
+        const progress = this.registry.get('mapProgress') as { unlockedMaps: MapId[]; gems: number };
+        const campaignIds = new Set(Object.values(CAMPAIGN_MAPS));
+        const eligibleMaps = MAPS.filter((map) => campaignIds.has(map.id) || progress.unlockedMaps.includes(map.id) || map.category === 'Expert');
+        const categories = count === 3 ? ['Beginner', 'Advanced', 'Expert'] : ['Beginner', 'Beginner', 'Advanced', 'Advanced', 'Expert'];
+        const waves = count === 3 ? [10, 12, 15] : [10, 11, 12, 13, 15];
+        const mutationChoices = ['sluggishMechanisms', 'rapidFire', 'crowdedWaves', 'extendedReach', 'dulledImpact', 'bountySurge'];
+        const nodes = categories.map((category, index) => {
+          const choices = eligibleMaps.filter((map) => map.category === category);
+          const map = choices[Math.floor(Math.random() * choices.length)] ?? MAPS.find((entry) => entry.category === category) ?? MAPS[0]!;
+          return { mapId: map.id, waves: waves[index]!, mutationId: mutationChoices[Math.floor(Math.random() * mutationChoices.length)]! };
+        });
+        const odysseyState = { length: count, nodeIndex: 0, nodes, baseHealth: 100, carryCoins: 0, vaultXp: 0, vaultGems: 0, vaultMastery: {}, nextDamageBoost: 1, nextRangeBoost: 1, scoutUntil: -1 };
+        clearSetup();
+        setupHeader(`${length === 3 ? 'MINI' : 'GRAND'} ODYSSEY ROUTE`, 'Follow the expedition map from the first node to the finish.', showLengthPicker);
+        let firstNode = 0;
+        const leftCardX = 495;
+        const rightCardX = 790;
+        const cardY = 325;
+        const cardWidth = 230;
+        const cardHeight = 154;
+        const mapArt: Phaser.GameObjects.Graphics[] = [];
+        const firstLabel = this.add.text(leftCardX, 194, '', { fontFamily: 'Arial', fontSize: '16px', color: C.gold, fontStyle: 'bold', letterSpacing: 1 }).setOrigin(0.5).setDepth(23); setupObjects.push(firstLabel);
+        const secondLabel = this.add.text(rightCardX, 194, '', { fontFamily: 'Arial', fontSize: '16px', color: C.gold, fontStyle: 'bold', letterSpacing: 1 }).setOrigin(0.5).setDepth(23); setupObjects.push(secondLabel);
+        const firstFrame = this.add.rectangle(leftCardX, cardY, cardWidth, cardHeight, 0x25234a).setStrokeStyle(2, 0xffd15e).setDepth(22); setupObjects.push(firstFrame);
+        const secondFrame = this.add.rectangle(rightCardX, cardY, cardWidth, cardHeight, 0x25234a).setStrokeStyle(2, 0x63dcff).setDepth(22); setupObjects.push(secondFrame);
+        const firstName = this.add.text(leftCardX, 421, '', { fontFamily: 'Arial', fontSize: '15px', color: C.cream, fontStyle: 'bold', align: 'center', wordWrap: { width: 238 } }).setOrigin(0.5).setDepth(23); setupObjects.push(firstName);
+        const secondName = this.add.text(rightCardX, 421, '', { fontFamily: 'Arial', fontSize: '15px', color: C.cream, fontStyle: 'bold', align: 'center', wordWrap: { width: 238 } }).setOrigin(0.5).setDepth(23); setupObjects.push(secondName);
+        const firstMeta = this.add.text(leftCardX, 456, '', { fontFamily: 'Arial', fontSize: '11px', color: C.muted, align: 'center', wordWrap: { width: 240 }, lineSpacing: 3 }).setOrigin(0.5).setDepth(23); setupObjects.push(firstMeta);
+        const secondMeta = this.add.text(rightCardX, 456, '', { fontFamily: 'Arial', fontSize: '11px', color: C.muted, align: 'center', wordWrap: { width: 240 }, lineSpacing: 3 }).setOrigin(0.5).setDepth(23); setupObjects.push(secondMeta);
+        const arrow = this.add.text(642, cardY, '➜', { fontFamily: 'Arial', fontSize: '36px', color: C.gold, fontStyle: 'bold' }).setOrigin(0.5).setDepth(24); setupObjects.push(arrow);
+        const progressLabel = this.add.text(640, 505, '', { fontFamily: 'Arial', fontSize: '12px', color: '#9ed9eb', fontStyle: 'bold', letterSpacing: 1 }).setOrigin(0.5).setDepth(23); setupObjects.push(progressLabel);
+        const scrollTrack = this.add.rectangle(640, 536, 430, 12, 0x090c19).setStrokeStyle(1, 0x607c82).setDepth(23).setInteractive({ useHandCursor: true }); setupObjects.push(scrollTrack);
+        const handleWidth = Math.max(78, 430 * 2 / count);
+        const scrollHandle = this.add.rectangle(640, 536, handleWidth, 10, 0x75efc1).setDepth(24).setInteractive({ useHandCursor: true }); setupObjects.push(scrollHandle);
+        const prev = setupButton(390, 325, 40, '‹', 0x2b2856, () => { firstNode = Math.max(0, firstNode - 1); refreshRoute(); });
+        const next = setupButton(890, 325, 40, '›', 0x2b2856, () => { firstNode = Math.min(count - 2, firstNode + 1); refreshRoute(); });
+        const startButton = setupButton(640, 613, 300, `START ${length === 3 ? 'MINI' : 'GRAND'} ODYSSEY`, 0x315b60, () => launch('odyssey', { odysseyLength: count, odysseyState }));
+        const mutationName = (id: string) => ({ sluggishMechanisms: 'Sluggish Mechanisms', rapidFire: 'Rapid Fire', crowdedWaves: 'Crowded Waves', extendedReach: 'Extended Reach', dulledImpact: 'Dulled Impact', bountySurge: 'Bounty Surge' } as Record<string, string>)[id] ?? id;
+        const paintMap = (nodeIndex: number, x: number) => {
+          const map = MAPS.find((entry) => entry.id === nodes[nodeIndex]!.mapId)!;
+          const art = this.add.graphics().setDepth(23);
+          art.fillStyle(map.ground, 1).fillRoundedRect(x - 108, cardY - 69, 216, 138, 9);
+          const drawRoute = (routeMap: MapId, variant: 'main' | 'left' | 'right') => {
+            const route = createMapRoute(routeMap, variant);
+            art.lineStyle(9, map.road, 1);
+            for (let i = 1; i < route.length; i += 1) {
+              const a = route[i - 1]!; const b = route[i]!;
+              const px = (tileX: number) => x - 98 + tileX / (BOARD_COLUMNS - 1) * 196;
+              const py = (tileY: number) => cardY - 59 + tileY / (BOARD_ROWS - 1) * 118;
+              art.lineBetween(px(a.x), py(a.y), px(b.x), py(b.y));
+            }
+          };
+          if (map.id === 'dual-spawn-convergence' || map.id === 'split-fork') { drawRoute(map.id, 'left'); drawRoute(map.id, 'right'); }
+          else drawRoute(map.id, 'main');
+          mapArt.push(art); setupObjects.push(art);
+        };
+        const refreshRoute = () => {
+          firstNode = Phaser.Math.Clamp(firstNode, 0, count - 2);
+          mapArt.splice(0).forEach((art) => {
+            const position = setupObjects.indexOf(art);
+            if (position >= 0) setupObjects.splice(position, 1);
+            art.destroy();
+          });
+          const details = (index: number) => {
+            const node = nodes[index]!; const map = MAPS.find((entry) => entry.id === node.mapId)!;
+            return { map, node };
+          };
+          const one = details(firstNode); const two = details(firstNode + 1);
+          firstLabel.setText(firstNode === 0 ? 'NODE 1 · START' : `NODE ${firstNode + 1}`);
+          secondLabel.setText(`NODE ${firstNode + 2}${firstNode + 2 === count ? ' · FINISH' : ''}`);
+          firstName.setText(one.map.name); secondName.setText(two.map.name);
+          firstMeta.setText(`${one.map.category.toUpperCase()} · ${one.map.theme}\n${one.node.waves} waves · ${mutationName(one.node.mutationId)}`);
+          secondMeta.setText(`${two.map.category.toUpperCase()} · ${two.map.theme}\n${two.node.waves} waves · ${mutationName(two.node.mutationId)}`);
+          paintMap(firstNode, leftCardX); paintMap(firstNode + 1, rightCardX);
+          progressLabel.setText(`SHOWING NODES ${firstNode + 1}–${firstNode + 2} OF ${count}`);
+          const travel = Math.max(0, firstNode / (count - 2));
+          scrollHandle.setX(640 - (430 - handleWidth) / 2 + travel * (430 - handleWidth));
+          prev.bg.setAlpha(firstNode === 0 ? 0.4 : 1); next.bg.setAlpha(firstNode >= count - 2 ? 0.4 : 1);
+        };
+        const seekTrack = (pointer: Phaser.Input.Pointer) => {
+          const ratio = Phaser.Math.Clamp((pointer.x - 425) / 430, 0, 1);
+          firstNode = Math.round(ratio * (count - 2)); refreshRoute();
+        };
+        scrollTrack.on('pointerdown', seekTrack);
+        scrollHandle.on('pointerdown', (pointer: Phaser.Input.Pointer) => { seekTrack(pointer); this.input.setDraggable(scrollHandle); });
+        scrollHandle.on('drag', (pointer: Phaser.Input.Pointer) => seekTrack(pointer));
+        this.input.setDraggable(scrollHandle);
+        prev.text.setAlpha(1); next.text.setAlpha(1); startButton.text.setAlpha(1);
+        refreshRoute();
+      };
+      showLengthPicker();
     });
     // Keep the legacy campaign picker below the mask for its progression
     // state; the new central setup opens the same choices in a larger layout.
