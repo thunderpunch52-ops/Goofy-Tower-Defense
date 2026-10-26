@@ -18,6 +18,10 @@ export class ProgressionScene extends Phaser.Scene {
   private selectedEnemy: EnemyKey = 'sock';
   private bestiaryCategory: BestiaryCategory = 'Normal';
   private selectedBestiaryElite: EndlessEliteId = 'midas';
+  private bestiaryScrollOffset = 0;
+  private bestiaryScrollTrack?: Phaser.GameObjects.Rectangle;
+  private bestiaryScrollThumb?: Phaser.GameObjects.Rectangle;
+  private bestiaryScrollLabel?: Phaser.GameObjects.Text;
   private tabObjects: Phaser.GameObjects.GameObject[] = [];
   private tabControls: Phaser.GameObjects.GameObject[] = [];
   private status?: Phaser.GameObjects.Text;
@@ -74,6 +78,10 @@ export class ProgressionScene extends Phaser.Scene {
     this.bestiaryCategoryButtons.length = 0;
     this.bestiaryCategory = 'Normal';
     this.selectedBestiaryElite = 'midas';
+    this.bestiaryScrollOffset = 0;
+    this.bestiaryScrollTrack = undefined;
+    this.bestiaryScrollThumb = undefined;
+    this.bestiaryScrollLabel = undefined;
     this.pathButtons.length = 0;
     this.pathLabels.length = 0;
     this.status = undefined;
@@ -190,6 +198,10 @@ export class ProgressionScene extends Phaser.Scene {
       this.towerCardContainer?.setY(-this.towerScrollOffset);
     });
     this.input.on('wheel', (pointer: Phaser.Input.Pointer, _objects: Phaser.GameObjects.GameObject[], _dx: number, dy: number) => {
+      if (this.tab === 'bestiary' && pointer.x >= 40 && pointer.x <= 590 && pointer.y >= 230 && pointer.y <= 665) {
+        this.scrollBestiary(dy);
+        return;
+      }
       if (this.tab !== 'mastery' || pointer.x < 40 || pointer.x > 585 || pointer.y < 175 || pointer.y > 670) return;
       this.towerScrollOffset = Phaser.Math.Clamp(this.towerScrollOffset + dy * 0.65, 0, this.towerScrollMax);
       this.towerCardContainer?.setY(-this.towerScrollOffset);
@@ -395,6 +407,21 @@ export class ProgressionScene extends Phaser.Scene {
       label.setInteractive({ useHandCursor: true }).on('pointerdown', select);
       this.bestiaryCategoryButtons.push({ category, button });
     });
+    this.bestiaryScrollTrack = this.add.rectangle(574, 445, 10, 420, 0x17152f).setStrokeStyle(1, 0x7775aa).setData('tab', 'bestiary').setDepth(6);
+    this.bestiaryScrollThumb = this.add.rectangle(574, 250, 8, 64, 0x63dcff).setStrokeStyle(1, 0xc8f6ff)
+      .setInteractive({ useHandCursor: true }).setData('tab', 'bestiary').setDepth(7);
+    this.bestiaryScrollLabel = this.add.text(574, 667, 'SCROLL', { fontFamily: 'Arial', fontSize: '7px', color: C.blue, fontStyle: 'bold', align: 'center' }).setOrigin(0.5).setData('tab', 'bestiary').setDepth(7).setVisible(false);
+    this.input.setDraggable(this.bestiaryScrollThumb);
+    this.bestiaryScrollThumb.on('drag', (_pointer: Phaser.Input.Pointer, _dragX: number, dragY: number) => {
+      const maxOffset = this.bestiaryMaxScrollRows();
+      const thumbHeight = this.bestiaryScrollThumb?.height ?? 64;
+      const top = 236 + thumbHeight / 2;
+      const bottom = 656 - thumbHeight / 2;
+      this.bestiaryScrollThumb?.setY(Phaser.Math.Clamp(dragY, top, bottom));
+      const ratio = (this.bestiaryScrollThumb!.y - top) / Math.max(1, bottom - top);
+      this.bestiaryScrollOffset = Math.round(ratio * maxOffset);
+      this.refreshBestiaryCards();
+    });
     Object.keys(ENEMIES).forEach((id, index) => {
       const col = Math.floor(index / 6);
       const row = index % 6;
@@ -431,6 +458,7 @@ export class ProgressionScene extends Phaser.Scene {
 
   private selectBestiaryCategory(category: BestiaryCategory): void {
     this.bestiaryCategory = category;
+    this.bestiaryScrollOffset = 0;
     if (category !== 'Elite Types') {
       const entries = this.bestiaryEnemies(category);
       if (!entries.includes(this.selectedEnemy) && entries[0]) this.selectedEnemy = entries[0];
@@ -450,6 +478,17 @@ export class ProgressionScene extends Phaser.Scene {
       if (threat === 'Unique') return category === 'Unique';
       return category === 'Normal';
     });
+  }
+
+  private bestiaryMaxScrollRows(): number {
+    const count = this.bestiaryEnemies(this.bestiaryCategory).length;
+    return Math.max(0, Math.ceil(count / 2) - 7);
+  }
+
+  private scrollBestiary(deltaY: number): void {
+    if (!deltaY || this.bestiaryCategory === 'Elite Types') return;
+    this.bestiaryScrollOffset = Phaser.Math.Clamp(this.bestiaryScrollOffset + (deltaY > 0 ? 1 : -1), 0, this.bestiaryMaxScrollRows());
+    this.refreshBestiaryCards();
   }
 
   private updateBestiaryDetails(): void {
@@ -479,14 +518,27 @@ export class ProgressionScene extends Phaser.Scene {
         .setStrokeStyle(selected ? 2 : 1, selected ? 0xffd15e : 0x526c75);
     });
     const visibleEnemies = this.bestiaryCategory === 'Elite Types' ? [] : this.bestiaryEnemies(this.bestiaryCategory);
+    const maxRows = Math.ceil(visibleEnemies.length / 2);
+    const maxOffset = Math.max(0, maxRows - 7);
+    this.bestiaryScrollOffset = Phaser.Math.Clamp(this.bestiaryScrollOffset, 0, maxOffset);
+    const thumbHeight = Math.max(54, 420 * 7 / Math.max(7, maxRows));
+    const thumbTop = 236 + thumbHeight / 2;
+    const thumbBottom = 656 - thumbHeight / 2;
+    const scrollVisible = this.bestiaryCategory !== 'Elite Types' && maxOffset > 0;
+    this.bestiaryScrollTrack?.setVisible(scrollVisible);
+    this.bestiaryScrollThumb?.setVisible(scrollVisible).setSize(8, thumbHeight);
+    this.bestiaryScrollLabel?.setVisible(scrollVisible);
+    if (scrollVisible) this.bestiaryScrollThumb?.setY(thumbTop + (this.bestiaryScrollOffset / maxOffset) * (thumbBottom - thumbTop));
     Object.entries(ENEMIES).forEach(([id, enemy]) => {
       const index = visibleEnemies.indexOf(id as EnemyKey);
-      const visible = index >= 0;
+      const firstVisible = this.bestiaryScrollOffset * 2;
+      const visible = index >= firstVisible && index < firstVisible + 14;
       this.enemyButtons[Object.keys(ENEMIES).indexOf(id)]?.setVisible(visible);
       this.enemyLabels[Object.keys(ENEMIES).indexOf(id)]?.setVisible(visible);
       if (!visible) return;
-      const col = Math.floor(index / 6);
-      const row = index % 6;
+      const localIndex = index - firstVisible;
+      const col = localIndex % 2;
+      const row = Math.floor(localIndex / 2);
       const x = 58 + col * 260;
       const y = 244 + row * 58;
       this.enemyButtons[Object.keys(ENEMIES).indexOf(id)]?.setPosition(x + 118, y + 20);
@@ -500,8 +552,8 @@ export class ProgressionScene extends Phaser.Scene {
     });
     ENDLESS_ELITES.forEach((elite, index) => {
       const visible = this.bestiaryCategory === 'Elite Types';
-      const col = Math.floor(index / 4);
-      const row = index % 4;
+      const col = index % 2;
+      const row = Math.floor(index / 2);
       const x = 58 + col * 260;
       const y = 244 + row * 78;
       this.eliteButtons[index]?.setVisible(visible).setPosition(x + 118, y + 27)

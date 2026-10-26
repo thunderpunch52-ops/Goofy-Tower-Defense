@@ -311,7 +311,10 @@ export class GameScene extends Phaser.Scene {
       this.runMasteryXp = new Map(Object.entries(this.odysseyState.vaultMastery));
       for (const id of [activeOdysseyNode?.mutationId, activeOdysseyNode?.branchMutationId]) {
         const mutation = CAMPAIGN_MUTATIONS.find((item) => item.id === id);
-        if (mutation) this.mutationStacks[mutation.id] = 1;
+        if (mutation) {
+          this.mutationStacks[mutation.id] = 1;
+          this.mutationChoiceHistory.push(mutation.id);
+        }
       }
     }
     this.visualRoutes = this.mapId === 'dual-spawn-convergence' || this.mapId === 'split-fork'
@@ -3464,6 +3467,10 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     if (tower.spec.id === 'quantumPendulum') {
+      // Cache the target point before damage: a lethal pulse destroys its
+      // Phaser objects, but the rewind beam still needs a stable endpoint.
+      const targetX = target.sprite.x;
+      const targetY = target.sprite.y;
       const affected = candidates.filter((enemy) => enemy !== target && enemy.route === target.route
         && Math.abs(enemy.pathProgress - attackProgress) <= (tower.ranks[0]! >= 2 ? 1 : 0.15))
         .sort((a, b) => b.pathProgress - a.pathProgress)
@@ -3472,7 +3479,7 @@ export class GameScene extends Phaser.Scene {
       const limit = tower.ranks[0]! >= 6 ? 5 : tower.ranks[0]! >= 2 ? 3 : 1;
       for (const enemy of affected.slice(0, limit)) {
         this.damageEnemy(enemy, tower, damage, true);
-        if (!enemy.spec.boss) {
+        if (enemy.alive && !enemy.spec.boss) {
           enemy.pathProgress = Math.max(0, enemy.pathProgress - (tower.ranks[0]! >= 5 ? 6 : 4));
           if (tower.ranks[1]! >= 1) { enemy.damageTakenMultiplier = Math.max(enemy.damageTakenMultiplier, tower.ranks[1]! >= 2 ? 2 : 1.25); enemy.damageTakenUntil = Math.max(enemy.damageTakenUntil, this.simTime + (tower.ranks[1]! >= 3 ? 6 : 4)); }
           this.positionEnemy(enemy);
@@ -3481,7 +3488,7 @@ export class GameScene extends Phaser.Scene {
       if (tower.ranks[2]! >= 1) this.spawnTimer += tower.ranks[2]! >= 7 ? 8 : tower.ranks[2]! >= 5 ? 5 : tower.ranks[2]! >= 2 ? 3 : 1;
       const center = this.towerCenter(tower.tile, tower.spec);
       const pendulum = this.addToBoard(this.add.graphics().setDepth(6));
-      pendulum.lineStyle(3, 0x9b83dc, 0.9).lineBetween(center.x, center.y, target.sprite.x, target.sprite.y);
+      pendulum.lineStyle(3, 0x9b83dc, 0.9).lineBetween(center.x, center.y, targetX, targetY);
       this.tweens.add({ targets: pendulum, alpha: 0, duration: 320, onComplete: () => pendulum.destroy() });
       return;
     }
