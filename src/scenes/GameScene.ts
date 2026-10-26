@@ -74,6 +74,12 @@ interface PendingImpact { enemyId: number; tower: PlacedTower; damage: number; s
 interface RouteArrow { route: Tile[]; progress: number; elapsed: number; graphic: Phaser.GameObjects.Graphics }
 interface MegaHazard { route: Tile[]; progress: number; expiresAt: number; speedMultiplier: number; graphic: Phaser.GameObjects.Graphics }
 interface CampaignMutation { id: string; name: string; description: string; side: 'GOOD' | 'BAD' | 'HELL' | 'UNIQUE'; stackCap: number; stackable?: boolean }
+interface OdysseyNode { mapId: MapId; waves: number; mutationId: string; branchMutationId?: string }
+interface OdysseyState {
+  length: number; nodeIndex: number; nodes: OdysseyNode[]; baseHealth: number; carryCoins: number;
+  vaultXp: number; vaultGems: number; vaultMastery: Record<string, number>;
+  nextDamageBoost: number; nextRangeBoost: number; scoutUntil: number;
+}
 
 const CAMPAIGN_MUTATIONS: CampaignMutation[] = [
   { id: 'rapidFire', name: 'Rapid Fire', description: 'All towers gain 10% attack speed per stack, up to 150%.', side: 'GOOD', stackCap: 15 },
@@ -114,6 +120,17 @@ export class GameScene extends Phaser.Scene {
   private endlessMode = false;
   private endlessMysteryEnabled = false;
   private endlessModifiersEnabled = false;
+  private draftMode: 'none' | 'campaign' | 'endless' = 'none';
+  private draftRoster: string[] = [];
+  private draftChoiceOpen = false;
+  private draftChoiceObjects: Phaser.GameObjects.GameObject[] = [];
+  private draftPicksRemaining = 0;
+  private draftRerollUsed = false;
+  private draftWaitingForNextWave = false;
+  private odysseyMode = false;
+  private odysseyState?: OdysseyState;
+  private odysseyRestOpen = false;
+  private odysseyOverlayObjects: Phaser.GameObjects.GameObject[] = [];
   private mysteryTowerMode = false;
   private mysteryTowerCost = 0;
   private mysteryTowerRefund = false;
@@ -245,14 +262,30 @@ export class GameScene extends Phaser.Scene {
 
   create(): void {
     initializeProgress(this.registry);
-    this.mapPreview = this.registry.get('runMode') === 'map-preview';
-    this.endlessMode = this.registry.get('runMode') === 'endless';
-    this.endlessMysteryEnabled = this.endlessMode && Boolean(this.registry.get('endlessMysteryEnabled'));
-    this.endlessModifiersEnabled = this.endlessMode && Boolean(this.registry.get('endlessModifiersEnabled'));
+    const runMode = String(this.registry.get('runMode') ?? 'campaign');
+    this.mapPreview = runMode === 'map-preview';
+    this.endlessMode = runMode === 'endless' || runMode === 'draft-endless';
+    this.draftMode = runMode === 'draft-campaign' ? 'campaign' : runMode === 'draft-endless' ? 'endless' : 'none';
+    this.draftRoster = this.draftMode === 'none' ? [] : [...((this.registry.get('draftRoster') as string[] | undefined) ?? [])];
+    this.odysseyMode = runMode === 'odyssey';
+    this.odysseyState = this.odysseyMode ? (this.registry.get('odysseyState') as OdysseyState | undefined) ?? this.createOdysseyState(Number(this.registry.get('odysseyLength') ?? 3)) : undefined;
+    if (this.odysseyMode && this.odysseyState) this.registry.set('odysseyState', this.odysseyState);
+    this.endlessMysteryEnabled = runMode === 'endless' && Boolean(this.registry.get('endlessMysteryEnabled'));
+    this.endlessModifiersEnabled = runMode === 'endless' && Boolean(this.registry.get('endlessModifiersEnabled'));
     this.resetRunState();
-    const requestedMap = this.registry.get('selectedMapId') as MapId | undefined;
+    const activeOdysseyNode = this.odysseyMode ? this.odysseyState?.nodes[this.odysseyState.nodeIndex] : undefined;
+    const requestedMap = activeOdysseyNode?.mapId ?? this.registry.get('selectedMapId') as MapId | undefined;
     this.campaignStage = Phaser.Math.Clamp(Math.floor(Number(this.registry.get('campaignStage') ?? 1)), 1, 5);
-    this.mapId = (this.mapPreview || this.endlessMode) && MAPS.some((map) => map.id === requestedMap) ? requestedMap! : CAMPAIGN_MAPS[this.campaignStage]!;
+    this.mapId = (this.mapPreview || this.endlessMode || this.odysseyMode) && MAPS.some((map) => map.id === requestedMap) ? requestedMap! : CAMPAIGN_MAPS[this.campaignStage]!;
+    if (this.odysseyMode && this.odysseyState) {
+      this.baseHealth = this.odysseyState.baseHealth;
+      this.coins = 450 + Math.min(1500, this.odysseyState.carryCoins);
+      this.runMasteryXp = new Map(Object.entries(this.odysseyState.vaultMastery));
+      for (const id of [activeOdysseyNode?.mutationId, activeOdysseyNode?.branchMutationId]) {
+        const mutation = CAMPAIGN_MUTATIONS.find((item) => item.id === id);
+        if (mutation) this.mutationStacks[mutation.id] = 1;
+      }
+    }
     this.visualRoutes = this.mapId === 'dual-spawn-convergence' || this.mapId === 'split-fork'
       ? [createMapRoute(this.mapId, 'left'), createMapRoute(this.mapId, 'right')]
       : [createMapRoute(this.mapId)];
@@ -267,6 +300,7 @@ export class GameScene extends Phaser.Scene {
     this.drawPanels();
     this.cursorKeys = this.input.keyboard?.createCursorKeys();
     this.beginWave(1);
+    if (this.draftMode !== 'none' && this.draftRoster.length === 0) this.openDraftChoice(3);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.disposeScene());
   }
 
@@ -394,7 +428,7 @@ export class GameScene extends Phaser.Scene {
   update(_time: number, deltaMs: number): void {
     this.stepRouteArrows(Math.min(deltaMs / 1000, 0.1));
     this.panBoardWithKeys(deltaMs / 1000);
-    if (this.paused || this.modifierChoiceOpen || this.phase === 'victory' || this.phase === 'defeat') return;
+    if (this.paused || this.modifierChoiceOpen || this.draftChoiceOpen || this.odysseyRestOpen || this.phase === 'victory' || this.phase === 'defeat') return;
     let remaining = Math.min(deltaMs / 1000, 0.1) * this.speed;
     while (remaining > 0) {
       const step = Math.min(remaining, 1 / 60);
@@ -483,10 +517,125 @@ export class GameScene extends Phaser.Scene {
 
   private get totalWaves(): number {
     if (this.endlessMode) return Number.POSITIVE_INFINITY;
+    if (this.odysseyMode && this.odysseyState) return this.odysseyState.nodes[this.odysseyState.nodeIndex]?.waves ?? 15;
+    if (this.draftMode === 'campaign') return 15;
     if (this.mapPreview) return STAGE_ONE_WAVES.length;
     if (this.campaignStage <= 3) return this.campaignStage * 5;
     if (this.campaignStage === 4 && this.star < 3) return 10;
     return 15;
+  }
+
+  private createOdysseyState(length: number): OdysseyState {
+    const nodeCount = length === 5 ? 5 : 3;
+    const progression = this.registry.get('mapProgress') as { unlockedMaps?: MapId[] } | undefined;
+    const campaignIds = new Set(Object.values(CAMPAIGN_MAPS));
+    const available = MAPS.filter((map) => campaignIds.has(map.id) || progression?.unlockedMaps?.includes(map.id));
+    const categoryForNode = nodeCount === 3
+      ? ['Beginner', 'Advanced', 'Expert']
+      : ['Beginner', 'Beginner', 'Advanced', 'Advanced', 'Expert'];
+    const mutationIds = ['sluggishMechanisms', 'rapidFire', 'crowdedWaves', 'extendedReach', 'dulledImpact', 'bountySurge'];
+    const nodes: OdysseyNode[] = categoryForNode.map((category, index) => {
+      const choices = available.filter((map) => map.category === category);
+      const map = choices[Math.floor(Math.random() * choices.length)] ?? MAPS.find((entry) => entry.category === category) ?? MAPS[0]!;
+      const waveCount = nodeCount === 3 ? [10, 12, 15][index]! : [10, 11, 12, 13, 15][index]!;
+      return { mapId: map.id, waves: waveCount, mutationId: mutationIds[Math.floor(Math.random() * mutationIds.length)]! };
+    });
+    return { length: nodeCount, nodeIndex: 0, nodes, baseHealth: 100, carryCoins: 0, vaultXp: 0, vaultGems: 0, vaultMastery: {}, nextDamageBoost: 1, nextRangeBoost: 1, scoutUntil: -1 };
+  }
+
+  private clearDraftOverlay(): void {
+    this.draftChoiceObjects.splice(0).forEach((object) => object.destroy());
+    this.draftChoiceOpen = false;
+  }
+
+  private openDraftChoice(picks: number): void {
+    this.clearDraftOverlay();
+    this.draftChoiceOpen = true;
+    this.draftPicksRemaining = picks;
+    this.draftRerollUsed = false;
+    let choices: Array<TowerSpec | null> = [];
+    const drawChoices = () => {
+      const pool = ROSTER_TOWERS.filter((tower) => !this.draftRoster.includes(tower.id) && !choices.includes(tower));
+      Phaser.Utils.Array.Shuffle(pool);
+      choices = pool.slice(0, 3);
+      while (choices.length < 3) choices.push(null);
+    };
+    const addText = (x: number, y: number, text: string, style: Phaser.Types.GameObjects.Text.TextStyle) => {
+      const item = this.add.text(x, y, text, style).setOrigin(0.5).setDepth(52);
+      this.draftChoiceObjects.push(item);
+      return item;
+    };
+    const finish = () => {
+      this.clearDraftOverlay();
+      this.registry.set('draftRoster', [...this.draftRoster]);
+      this.setTowerGridOpen(false);
+      this.updateHUD();
+      if (this.draftWaitingForNextWave) { this.draftWaitingForNextWave = false; this.beginWave(this.wave + 1); }
+    };
+    const showReplacement = (tower: TowerSpec) => {
+      this.clearDraftOverlay(); this.draftChoiceOpen = true;
+      this.add.rectangle(W / 2, H / 2, 720, 520, 0x0b1020, 0.97).setStrokeStyle(2, 0x63dcff).setDepth(50);
+      this.draftChoiceObjects.push(this.children.list[this.children.list.length - 1]!);
+      addText(W / 2, 137, `REPLACE A TOWER WITH ${tower.name.toUpperCase()}?`, { fontFamily: 'Arial', fontSize: '21px', color: '#fff5d7', fontStyle: 'bold', align: 'center', wordWrap: { width: 650 } });
+      addText(W / 2, 179, 'Choose a tower to remove from this run, or skip for $500.', { fontFamily: 'Arial', fontSize: '14px', color: '#c4c3e5' });
+      this.draftRoster.forEach((id, index) => {
+        const current = TOWERS.find((entry) => entry.id === id)!;
+        const y = 232 + index * 50;
+        const rect = this.add.rectangle(W / 2, y, 480, 40, 0x292750).setStrokeStyle(1, current.color).setDepth(52).setInteractive({ useHandCursor: true });
+        const label = addText(W / 2, y, `REMOVE ${current.name.toUpperCase()}`, { fontFamily: 'Arial', fontSize: '14px', color: '#fff5d7', fontStyle: 'bold' });
+        this.draftChoiceObjects.push(rect);
+        const choose = () => { this.draftRoster[index] = tower.id; this.draftPicksRemaining -= 1; if (this.draftPicksRemaining > 0) this.openDraftChoice(this.draftPicksRemaining); else finish(); };
+        rect.on('pointerdown', choose); label.setInteractive({ useHandCursor: true }).on('pointerdown', choose);
+      });
+      const skipY = 232 + this.draftRoster.length * 50;
+      const skip = this.add.rectangle(W / 2, skipY, 300, 42, 0x62404b).setStrokeStyle(1, 0xef7e9c).setDepth(52).setInteractive({ useHandCursor: true });
+      const skipText = addText(W / 2, skipY, 'SKIP · +$500 COINS', { fontFamily: 'Arial', fontSize: '14px', color: '#fff5d7', fontStyle: 'bold' });
+      this.draftChoiceObjects.push(skip);
+      const skipPick = () => { this.coins += 500; this.draftPicksRemaining -= 1; if (this.draftPicksRemaining > 0) this.openDraftChoice(this.draftPicksRemaining); else finish(); };
+      skip.on('pointerdown', skipPick); skipText.setInteractive({ useHandCursor: true }).on('pointerdown', skipPick);
+    };
+    const showChoices = () => {
+      this.clearDraftOverlay(); this.draftChoiceOpen = true;
+      const shade = this.add.rectangle(W / 2, H / 2, W, H, 0x071016, 0.84).setDepth(50).setInteractive(); this.draftChoiceObjects.push(shade);
+      const panel = this.add.rectangle(W / 2, H / 2, 820, 400, 0x201e40).setStrokeStyle(2, 0x63dcff).setDepth(51); this.draftChoiceObjects.push(panel);
+      addText(W / 2, 207, `${this.draftRoster.length === 0 ? 'STARTER DRAFT' : 'DRAFT PICK'} · ${this.draftPicksRemaining} PICK${this.draftPicksRemaining === 1 ? '' : 'S'} LEFT`, { fontFamily: 'Arial', fontSize: '20px', color: '#75efc1', fontStyle: 'bold', letterSpacing: 1 });
+      addText(W / 2, 237, `Wave ${Math.max(1, this.wave)} · Drafted towers stay available for the whole run`, { fontFamily: 'Arial', fontSize: '13px', color: '#c4c3e5' });
+      choices.forEach((tower, index) => {
+        const x = 390 + index * 250;
+        const y = 370;
+        const color = tower ? RARITY_COLOR[tower.rarity] : 0xffd15e;
+        const rect = this.add.rectangle(x, y, 220, 185, 0x292750).setStrokeStyle(2, color).setDepth(52).setInteractive({ useHandCursor: true }); this.draftChoiceObjects.push(rect);
+        if (tower) {
+          const icon = this.add.circle(x, y - 48, 20, tower.color).setStrokeStyle(2, 0x101820).setDepth(53); this.draftChoiceObjects.push(icon);
+          const towerIcons: Record<string, string> = {
+            lawnDartGnome: '🧙', leafBlowerGuy: '🍃', waterBalloonSlingshot: '🎈', stickyBubblegumDispenser: '🫧',
+            angryPigeon: '🐦', hotSauceSprinkler: '🌶️', squeakyRubberDuckCannon: '🦆', unstableToasterLauncher: '🍞',
+            freezeRayIceCreamTruck: '🍦', catLaserPointer: '🐈', discoTurret: '🪩', giantMechTeddyBear: '🧸',
+            anvilTrapdoor: '⚒️', cosmicRoomba: '🛸', cardboardFortress: '📦', sodaMachineMech: '🥤',
+            laserOfficePrinter: '🖨️', arcadeClawMachine: '🕹️', sentientMicrowaveOven: '🍿', hydraulicCarCrusher: '🚗', sentientTrafficLight: '🚦',
+          };
+          const towerIcon = this.add.text(x, y - 48, towerIcons[tower.id] ?? '⭐', { fontFamily: 'Arial', fontSize: '24px', align: 'center' }).setOrigin(0.5).setDepth(54); this.draftChoiceObjects.push(towerIcon);
+          addText(x, y - 7, tower.name, { fontFamily: 'Arial', fontSize: '17px', color: '#fff5d7', fontStyle: 'bold', align: 'center', wordWrap: { width: 194 } });
+          addText(x, y + 40, `${tower.rarity.toUpperCase()} · ${tower.role}`, { fontFamily: 'Arial', fontSize: '11px', color: `#${color.toString(16).padStart(6, '0')}`, align: 'center', wordWrap: { width: 192 } });
+          addText(x, y + 72, `PLACE FOR $${tower.cost}`, { fontFamily: 'Arial', fontSize: '12px', color: '#75efc1', fontStyle: 'bold' });
+          rect.on('pointerdown', () => {
+            if (this.draftRoster.length >= 6 && this.draftMode === 'endless') { showReplacement(tower); return; }
+            this.draftRoster.push(tower.id); this.draftPicksRemaining -= 1;
+            if (this.draftPicksRemaining > 0) { drawChoices(); showChoices(); } else finish();
+          });
+        } else {
+          addText(x, y - 4, 'SMALL POOL\nCONVERSION', { fontFamily: 'Arial', fontSize: '17px', color: '#ffd15e', fontStyle: 'bold', align: 'center', lineSpacing: 8 });
+          addText(x, y + 54, '+$400 COINS', { fontFamily: 'Arial', fontSize: '15px', color: '#75efc1', fontStyle: 'bold' });
+          rect.on('pointerdown', () => { this.coins += 400; this.draftPicksRemaining -= 1; if (this.draftPicksRemaining > 0) { drawChoices(); showChoices(); } else finish(); });
+        }
+      });
+      const reroll = this.add.rectangle(W / 2, 522, 210, 36, 0x182733).setStrokeStyle(1, this.draftRerollUsed ? 0x56536d : 0xf4c86a).setDepth(52).setInteractive({ useHandCursor: true }); this.draftChoiceObjects.push(reroll);
+      const rerollText = addText(W / 2, 522, this.draftRerollUsed ? 'REROLL USED' : 'REROLL · $200', { fontFamily: 'Arial', fontSize: '12px', color: this.draftRerollUsed ? '#8c8aa6' : '#fff5d7', fontStyle: 'bold' });
+      const doReroll = () => { if (this.draftRerollUsed || this.coins < 200) return; this.coins -= 200; this.draftRerollUsed = true; drawChoices(); showChoices(); };
+      reroll.on('pointerdown', doReroll); rerollText.setInteractive({ useHandCursor: true }).on('pointerdown', doReroll);
+      if (this.draftRoster.length >= 6 && this.draftMode === 'endless') addText(W / 2, 552, 'At the six-tower limit, a pick lets you replace one tower or skip for $500.', { fontFamily: 'Arial', fontSize: '11px', color: '#c4c3e5', align: 'center' });
+    };
+    drawChoices(); showChoices();
   }
 
   private startPlacingTower(): void {
@@ -573,7 +722,8 @@ export class GameScene extends Phaser.Scene {
     g.fillStyle(0xffd15e, 0.9).fillRoundedRect(400, 48, 80, 4, 2);
     g.fillStyle(0xffffff, 0.12);
     [[54, 64], [365, 657], [917, 65], [1225, 654], [402, 664], [874, 54]].forEach(([x, y]) => g.fillCircle(x!, y!, 3));
-    this.add.text(68, 54, this.mapPreview ? 'MAP PREVIEW   ·   STAGE 1 WAVES' : this.endlessMode ? `ENDLESS   /   ${this.star} STAR` : `STAGE ${this.campaignStage}   /   ${this.star} STAR`, { fontFamily: 'Arial', fontSize: '13px', color: COLORS.muted, fontStyle: 'bold', letterSpacing: 2 });
+    const modeHeading = this.odysseyMode && this.odysseyState ? `ODYSSEY  ·  NODE ${this.odysseyState.nodeIndex + 1}/${this.odysseyState.length}` : this.draftMode === 'campaign' ? 'DRAFT CAMPAIGN' : this.draftMode === 'endless' ? `DRAFT ENDLESS  /  ${this.star} STAR` : this.mapPreview ? 'MAP PREVIEW   ·   STAGE 1 WAVES' : this.endlessMode ? `ENDLESS   /   ${this.star} STAR` : `STAGE ${this.campaignStage}   /   ${this.star} STAR`;
+    this.add.text(68, 54, modeHeading, { fontFamily: 'Arial', fontSize: '13px', color: COLORS.muted, fontStyle: 'bold', letterSpacing: 2 });
     this.add.text(68, 77, getMap(this.mapId).name, { fontFamily: 'Arial', fontSize: '21px', color: COLORS.cream, fontStyle: 'bold', wordWrap: { width: 300 } });
     this.add.text(1068, 58, 'GOOFY TOWER SHOP', { fontFamily: 'Trebuchet MS', fontSize: '13px', color: COLORS.muted, fontStyle: 'bold', letterSpacing: 1 });
   }
@@ -926,7 +1076,7 @@ export class GameScene extends Phaser.Scene {
     this.add.text(leftX, 272, 'COINS', { fontFamily: 'Arial', fontSize: '12px', color: COLORS.muted, fontStyle: 'bold', letterSpacing: 2 });
     this.coinLabel = this.add.text(leftX, 294, '$450', { fontFamily: 'Arial', fontSize: '24px', color: '#f4c86a', fontStyle: 'bold' });
 
-    const mutationRun = !this.mapPreview && ((this.endlessMode && this.endlessModifiersEnabled) || (!this.endlessMode && this.campaignStage === 5));
+    const mutationRun = !this.mapPreview && (this.odysseyMode || (this.endlessMode && this.endlessModifiersEnabled) || (!this.endlessMode && this.campaignStage === 5));
     if (mutationRun) {
       this.mutationTabButton = this.add.rectangle(18, 430, 32, 132, 0x3c3262).setStrokeStyle(1.5, 0xb98cf5)
         .setDepth(12).setInteractive({ useHandCursor: true });
@@ -1028,7 +1178,7 @@ export class GameScene extends Phaser.Scene {
     this.enemyCountLabel = this.add.text(1072, 549, '0 alive · 0 queued', { fontFamily: 'Arial', fontSize: '13px', color: COLORS.cream, align: 'center' }).setOrigin(0.5, 0);
     this.add.text(1072, 576, 'Available after all enemies spawn.\nDisabled while a boss is alive.', { fontFamily: 'Arial', fontSize: '12px', color: COLORS.muted, align: 'center', lineSpacing: 6, wordWrap: { width: 258 } }).setOrigin(0.5, 0);
     this.modifierStatusLabel = this.add.text(1072, 610, '', { fontFamily: 'Arial', fontSize: '11px', color: '#f4c86a', align: 'center', wordWrap: { width: 260 } }).setOrigin(0.5, 0);
-    if (this.campaignStage !== 5 && !this.endlessMode || this.mapPreview) this.modifierStatusLabel.setVisible(false);
+    if ((this.campaignStage !== 5 && !this.endlessMode && !this.odysseyMode) || this.mapPreview || this.draftMode !== 'none') this.modifierStatusLabel.setVisible(false);
     this.modifierStatusLabel.setInteractive({ useHandCursor: true }).on('pointerdown', () => this.showActiveModifiers());
     const lobby = this.add.rectangle(1072, 666, 272, 36, 0x182733).setStrokeStyle(1, 0x607c82).setInteractive({ useHandCursor: true });
     this.add.text(1072, 666, 'RETURN TO LOBBY', { fontFamily: 'Arial', fontSize: '14px', color: COLORS.cream, fontStyle: 'bold', letterSpacing: 1 }).setOrigin(0.5);
@@ -1067,7 +1217,7 @@ export class GameScene extends Phaser.Scene {
       button.on('pointerout', () => button.setFillStyle(0x263447));
       button.on('pointerdown', () => {
         const unlock = this.towerUnlockState(spec);
-        if (!unlock.unlocked) {
+        if (this.draftMode === 'none' && !unlock.unlocked) {
           this.towerGridHint?.setText(`🔒 ${spec.name}: ${unlock.requirement}`);
           return;
         }
@@ -1145,8 +1295,8 @@ export class GameScene extends Phaser.Scene {
 
   private isMysteryOnlyRun(): boolean {
     return !this.mapPreview && (
-      (this.endlessMode && this.endlessMysteryEnabled)
-      || (!this.endlessMode && this.campaignStage === 4)
+      (this.endlessMode && this.draftMode === 'none' && this.endlessMysteryEnabled)
+      || (!this.endlessMode && !this.odysseyMode && this.draftMode === 'none' && this.campaignStage === 4)
     );
   }
 
@@ -1161,19 +1311,21 @@ export class GameScene extends Phaser.Scene {
     this.mysteryBoxTitle?.setVisible(showMystery);
     this.mysteryBoxMeta?.setVisible(showMystery);
     this.mysteryBoxTitle?.setText(this.mysteryTowerOffer ? `${this.mysteryTowerOffer.rarity.toUpperCase()} MYSTERY` : 'MYSTERY TOWER');
-    const stageFourFreeAvailable = !this.endlessMode && this.campaignStage === 4 && !this.mysteryBoxUsed;
+    const stageFourFreeAvailable = !this.endlessMode && !this.odysseyMode && this.draftMode === 'none' && this.campaignStage === 4 && !this.mysteryBoxUsed;
     this.mysteryBoxMeta?.setText(this.mysteryTowerOffer ? `${this.mysteryTowerCost ? `$${this.mysteryTowerCost} · ` : 'FREE · '}CLICK TO ${this.mysteryTowerCost ? 'BUY' : 'PLACE'}` : stageFourFreeAvailable ? 'FREE · LOW/MID ATTACK TOWER' : 'REVEALS RARITY · CLICK');
     this.mysteryBoxButton?.setInteractive({ useHandCursor: true }).setAlpha(1);
     const mysteryOnly = this.isMysteryOnlyRun();
     for (const [index, card] of this.towerGridCards.entries()) {
       const spec = ROSTER_TOWERS[index]!;
-      const locked = !this.towerUnlockState(spec).unlocked;
-      card.button.setVisible(open && !mysteryOnly);
-      card.icon.setVisible(open && !mysteryOnly);
-      card.title.setVisible(open && !mysteryOnly);
-      card.meta.setVisible(open && !mysteryOnly);
-      card.lock.setVisible(open && !mysteryOnly && locked);
-      card.lockText.setVisible(open && !mysteryOnly && locked);
+      const drafted = this.draftMode !== 'none' && this.draftRoster.includes(spec.id);
+      const locked = this.draftMode === 'none' && !this.towerUnlockState(spec).unlocked;
+      const visible = open && !mysteryOnly && (this.draftMode === 'none' || drafted);
+      card.button.setVisible(visible);
+      card.icon.setVisible(visible);
+      card.title.setVisible(visible);
+      card.meta.setVisible(visible);
+      card.lock.setVisible(visible && locked);
+      card.lockText.setVisible(visible && locked);
       card.lock.clear();
       if (open && locked) {
         const col = index % 3;
@@ -1186,7 +1338,7 @@ export class GameScene extends Phaser.Scene {
         card.lock.fillStyle(0xfff1f4, 1).fillRoundedRect(x - 8, y - 3, 16, 13, 2);
       }
     }
-    if (open) this.towerGridHint?.setText(mysteryOnly ? 'Mystery mode · only the mystery tower is available. Cancel before placement for a full refund.' : 'Choose an unlocked tower · locked towers show their unlock requirement');
+    if (open) this.towerGridHint?.setText(mysteryOnly ? 'Mystery mode · only the mystery tower is available. Cancel before placement for a full refund.' : this.draftMode !== 'none' ? 'Draft roster only · these tower types stay available for the whole run.' : 'Choose an unlocked tower · locked towers show their unlock requirement');
     this.updateHUD();
   }
 
@@ -3513,7 +3665,8 @@ export class GameScene extends Phaser.Scene {
     return stackables * (this.mutationStack('systemSlowdown') ? 0.6 : 1);
   }
   private globalRangeMultiplier(): number {
-    return Math.max(0.1, 1 + Math.min(1.5, this.mutationStack('extendedReach') * 0.15) - Math.min(0.3, this.mutationStack('narrowedSights') * 0.05)) * (this.mutationStack('shortLeash') ? 0.5 : 1);
+    const odyssey = this.odysseyMode ? this.odysseyState?.nextRangeBoost ?? 1 : 1;
+    return Math.max(0.1, 1 + Math.min(1.5, this.mutationStack('extendedReach') * 0.15) - Math.min(0.3, this.mutationStack('narrowedSights') * 0.05)) * (this.mutationStack('shortLeash') ? 0.5 : 1) * odyssey;
   }
   private effectiveTowerRange(tower: PlacedTower): number {
     const center = this.towerGridCenter(tower);
@@ -3527,7 +3680,7 @@ export class GameScene extends Phaser.Scene {
     });
     return tower.spec.range * tower.rangeMultiplier * (greenSignal ? 1.3 : 1);
   }
-  private globalDamageMultiplier(): number { return Math.max(0.1, 1 - Math.min(0.5, this.mutationStack('dulledImpact') * 0.1)) * (this.mutationStack('glassCannons') ? 1.5 : 1); }
+  private globalDamageMultiplier(): number { const odyssey = this.odysseyMode ? this.odysseyState?.nextDamageBoost ?? 1 : 1; return Math.max(0.1, 1 - Math.min(0.5, this.mutationStack('dulledImpact') * 0.1)) * (this.mutationStack('glassCannons') ? 1.5 : 1) * odyssey; }
   private statusDurationMultiplier(): number { return 1 + Math.min(1.5, this.mutationStack('lingeringEffects') * 0.15); }
   private enemySpawnRateMultiplier(): number { return 1 + Math.min(1, this.mutationStack('crowdedWaves') * 0.1); }
   private upgradePrice(base: number, target?: PlacedTower): number {
@@ -3952,11 +4105,17 @@ export class GameScene extends Phaser.Scene {
 
     const summary: string[] = [];
     for (const [towerId, amount] of awards) {
-      const levels = grantTowerXp(this.registry, towerId, amount);
       this.runMasteryXp.set(towerId, (this.runMasteryXp.get(towerId) ?? 0) + amount);
       const towerName = TOWERS.find((tower) => tower.id === towerId)?.name ?? towerId;
-      summary.push(`${towerName} +${amount}${levels ? ` · LEVEL ${towerMastery(this.registry, towerId).level}` : ''}`);
+      if (this.odysseyMode && this.odysseyState) {
+        this.odysseyState.vaultMastery[towerId] = (this.odysseyState.vaultMastery[towerId] ?? 0) + amount;
+        summary.push(`${towerName} +${amount} VAULT XP`);
+      } else {
+        const levels = grantTowerXp(this.registry, towerId, amount);
+        summary.push(`${towerName} +${amount}${levels ? ` · LEVEL ${towerMastery(this.registry, towerId).level}` : ''}`);
+      }
     }
+    if (this.odysseyMode && this.odysseyState) this.registry.set('odysseyState', this.odysseyState);
     if (summary.length) this.gridFeedback = `MASTERY XP · ${summary.join('  |  ')}`;
   }
 
@@ -4089,6 +4248,22 @@ export class GameScene extends Phaser.Scene {
     this.coins += payout;
     this.run.coins = this.coins;
     this.lastWavePayout = payout;
+    if (this.odysseyMode && this.odysseyState) {
+      this.odysseyState.vaultXp += 100;
+      this.odysseyState.baseHealth = this.baseHealth;
+      this.registry.set('odysseyState', this.odysseyState);
+      if (this.wave >= this.totalWaves) { this.completeOdysseyNode(); return; }
+    }
+    if (this.draftMode !== 'none') {
+      const draftDue = this.wave === 5 || this.wave === 10 || (this.draftMode === 'endless' && this.wave >= 15 && this.wave % 5 === 0);
+      if (draftDue) {
+        this.draftWaitingForNextWave = true;
+        this.phase = 'between-waves';
+        this.run.phase = 'between-waves';
+        this.openDraftChoice(1);
+        return;
+      }
+    }
     if (!this.endlessMode && this.wave >= this.totalWaves) { this.endRun(true); return; }
     if (advanceImmediately) this.beginWave(this.wave + 1);
     else {
@@ -4097,6 +4272,162 @@ export class GameScene extends Phaser.Scene {
       this.run.phase = 'between-waves';
       this.gridFeedback = '';
     }
+  }
+
+  private completeOdysseyNode(): void {
+    if (!this.odysseyState) return;
+    this.odysseyState.vaultGems += 5;
+    this.odysseyState.baseHealth = this.baseHealth;
+    this.odysseyState.carryCoins = Math.min(1500, Math.floor(this.coins * 0.5));
+    // Reinforcements last for the next map only.
+    this.odysseyState.nextDamageBoost = 1;
+    this.odysseyState.nextRangeBoost = 1;
+    this.registry.set('odysseyState', this.odysseyState);
+    if (this.odysseyState.nodeIndex + 1 >= this.odysseyState.length) {
+      this.settleOdyssey(1, true);
+      return;
+    }
+    this.phase = 'between-waves';
+    this.run.phase = 'between-waves';
+    this.showOdysseyRestStop();
+  }
+
+  private clearOdysseyOverlay(): void {
+    this.odysseyOverlayObjects.splice(0).forEach((object) => object.destroy());
+    this.odysseyRestOpen = false;
+  }
+
+  private showOdysseyRestStop(): void {
+    const state = this.odysseyState;
+    if (!state) return;
+    this.clearOdysseyOverlay();
+    this.odysseyRestOpen = true;
+    const add = <T extends Phaser.GameObjects.Rectangle | Phaser.GameObjects.Text>(object: T): T => { object.setDepth(55); this.odysseyOverlayObjects.push(object); return object; };
+    add(this.add.rectangle(W / 2, H / 2, W, H, 0x071016, 0.86).setInteractive());
+    add(this.add.rectangle(W / 2, H / 2, 760, 600, 0x201e40).setStrokeStyle(2, 0x75efc1));
+    add(this.add.text(W / 2, 93, `ODYSSEY REST STOP  ·  NODE ${state.nodeIndex + 1} CLEARED`, { fontFamily: 'Arial', fontSize: '22px', color: '#75efc1', fontStyle: 'bold', letterSpacing: 1 }).setOrigin(0.5));
+    const next = state.nodes[state.nodeIndex + 1]!;
+    const nextMap = MAPS.find((map) => map.id === next.mapId)!;
+    const nextMutation = CAMPAIGN_MUTATIONS.find((mutation) => mutation.id === next.mutationId)!;
+    const scout = state.scoutUntil >= state.nodeIndex + 1;
+    add(this.add.text(W / 2, 132, `NEXT: ${nextMap.name} · ${next.waves} WAVES${scout ? `\nMUTATOR: ${nextMutation.name}` : ''}${scout && state.nodeIndex + 2 < state.nodes.length ? `\nAFTER THAT: ${MAPS.find((map) => map.id === state.nodes[state.nodeIndex + 2]!.mapId)?.name} · ${CAMPAIGN_MUTATIONS.find((m) => m.id === state.nodes[state.nodeIndex + 2]!.mutationId)?.name}` : ''}`, { fontFamily: 'Arial', fontSize: '13px', color: '#c4c3e5', align: 'center', lineSpacing: 6, wordWrap: { width: 680 } }).setOrigin(0.5));
+    const feedback = add(this.add.text(W / 2, 232, `Base ${this.baseHealth}/100 · Current coins $${this.coins} · Vault ${state.vaultXp.toLocaleString()} XP / ${state.vaultGems} gems`, { fontFamily: 'Arial', fontSize: '14px', color: '#fff5d7', align: 'center' }).setOrigin(0.5));
+    const option = (y: number, label: string, action: () => void, color = 0x292750) => {
+      const rect = add(this.add.rectangle(W / 2, y, 560, 42, color).setStrokeStyle(1, 0x63dcff).setInteractive({ useHandCursor: true }));
+      const text = add(this.add.text(W / 2, y, label, { fontFamily: 'Arial', fontSize: '13px', color: '#fff5d7', fontStyle: 'bold', align: 'center' }).setOrigin(0.5).setInteractive({ useHandCursor: true }));
+      rect.on('pointerdown', action); text.on('pointerdown', action);
+    };
+    option(282, 'FIELD HOSPITAL · $300 · HEAL BASE +25', () => {
+      if (this.coins < 300 || this.baseHealth >= 100) { feedback.setText(this.baseHealth >= 100 ? 'Base health is already full.' : 'You need $300 coins for the field hospital.'); return; }
+      this.coins -= 300; this.baseHealth = Math.min(100, this.baseHealth + 25); state.baseHealth = this.baseHealth; feedback.setText(`Healed to ${this.baseHealth}/100 · Current coins $${this.coins} · Vault ${state.vaultXp.toLocaleString()} XP / ${state.vaultGems} gems`);
+    });
+    option(332, 'REINFORCE · 5 GEMS · +15% RANGE NEXT MAP', () => {
+      const progress = this.registry.get('mapProgress') as { gems: number; unlockedMaps: MapId[] };
+      if (progress.gems < 5) { feedback.setText('You need 5 gems for range reinforcement.'); return; }
+      progress.gems -= 5; state.nextRangeBoost *= 1.15; this.registry.set('mapProgress', progress); feedback.setText('Range reinforcement ready for the next map.');
+    });
+    option(382, 'REINFORCE · 5 GEMS · +15% DAMAGE NEXT MAP', () => {
+      const progress = this.registry.get('mapProgress') as { gems: number; unlockedMaps: MapId[] };
+      if (progress.gems < 5) { feedback.setText('You need 5 gems for damage reinforcement.'); return; }
+      progress.gems -= 5; state.nextDamageBoost *= 1.15; this.registry.set('mapProgress', progress); feedback.setText('Damage reinforcement ready for the next map.');
+    });
+    option(432, scout ? 'SCOUT REPORT · VIEW EXACT WAVE COMPOSITIONS' : 'SCOUT AHEAD · REVEAL THE NEXT TWO NODES', () => {
+      state.scoutUntil = Math.min(state.length - 1, state.nodeIndex + 2); this.registry.set('odysseyState', state); this.showOdysseyScoutReport();
+    });
+    const branchNode = state.nodeIndex === 1 || state.nodeIndex === 3;
+    if (branchNode) {
+      add(this.add.text(W / 2, 472, 'CHOOSE YOUR ROUTE', { fontFamily: 'Arial', fontSize: '12px', color: '#ffd15e', fontStyle: 'bold', letterSpacing: 1 }).setOrigin(0.5));
+      option(505, 'A · BOUNTY SURGE + HEAVY ENEMIES', () => { next.branchMutationId = 'titanBlood'; next.mutationId = 'bountySurge'; this.registry.set('odysseyState', state); feedback.setText('Route A selected: richer bounties, tougher enemies.'); }, 0x493044);
+      option(552, 'B · UPGRADE DISCOUNTS + FAST CROWDS', () => { next.branchMutationId = 'crowdedWaves'; next.mutationId = 'discountPath'; this.registry.set('odysseyState', state); feedback.setText('Route B selected: cheaper upgrades, faster crowds.'); }, 0x354b5d);
+    }
+    const continueY = branchNode ? 600 : 520;
+    const continueButton = add(this.add.rectangle(520, continueY, 250, 42, 0x315b60).setStrokeStyle(1, 0x75efc1).setInteractive({ useHandCursor: true }));
+    const continueText = add(this.add.text(520, continueY, 'CONTINUE EXPEDITION', { fontFamily: 'Arial', fontSize: '12px', color: '#fff5d7', fontStyle: 'bold' }).setOrigin(0.5).setInteractive({ useHandCursor: true }));
+    const continueRun = () => {
+      if (branchNode && !next.branchMutationId) { feedback.setText('Choose Route A or B before continuing.'); return; }
+      state.nodeIndex += 1; state.baseHealth = this.baseHealth; state.carryCoins = Math.min(1500, Math.floor(this.coins * 0.5));
+      this.registry.set('odysseyState', state); this.registry.set('selectedMapId', state.nodes[state.nodeIndex]!.mapId); this.scene.restart();
+    };
+    continueButton.on('pointerdown', continueRun); continueText.on('pointerdown', continueRun);
+    const extract = add(this.add.rectangle(800, continueY, 250, 42, 0x62404b).setStrokeStyle(1, 0xef7e9c).setInteractive({ useHandCursor: true }));
+    const extractText = add(this.add.text(800, continueY, 'EXTRACT · KEEP 75%', { fontFamily: 'Arial', fontSize: '12px', color: '#fff5d7', fontStyle: 'bold' }).setOrigin(0.5).setInteractive({ useHandCursor: true }));
+    const extractRun = () => this.settleOdyssey(0.75, false);
+    extract.on('pointerdown', extractRun); extractText.on('pointerdown', extractRun);
+  }
+
+  private showOdysseyScoutReport(): void {
+    const state = this.odysseyState;
+    if (!state) return;
+    this.clearOdysseyOverlay(); this.odysseyRestOpen = true;
+    const add = <T extends Phaser.GameObjects.Rectangle | Phaser.GameObjects.Text>(object: T): T => { object.setDepth(60); this.odysseyOverlayObjects.push(object); return object; };
+    add(this.add.rectangle(W / 2, H / 2, W, H, 0x071016, 0.9).setInteractive());
+    add(this.add.rectangle(W / 2, H / 2, 760, 600, 0x201e40).setStrokeStyle(2, 0x63dcff));
+    add(this.add.text(W / 2, 95, 'ODYSSEY SCOUT REPORT', { fontFamily: 'Arial', fontSize: '23px', color: '#63dcff', fontStyle: 'bold', letterSpacing: 1 }).setOrigin(0.5));
+    const nodeIndexes = [state.nodeIndex + 1, state.nodeIndex + 2].filter((index) => index < state.length);
+    let selected = nodeIndexes[0] ?? 0;
+    const report = add(this.add.text(W / 2, 230, '', { fontFamily: 'Arial', fontSize: '12px', color: '#fff5d7', align: 'left', lineSpacing: 3, wordWrap: { width: 650 } }).setOrigin(0.5, 0));
+    const refresh = () => {
+      const node = state.nodes[selected]!;
+      const map = MAPS.find((entry) => entry.id === node.mapId)!;
+      const mutation = CAMPAIGN_MUTATIONS.find((entry) => entry.id === node.mutationId)!;
+      const lines = Array.from({ length: node.waves }, (_, index) => {
+        const groups = STAGE_ONE_WAVES[index] ?? generateEndlessWave(index + 1);
+        const composition = groups.map((group) => `${group.count} ${ENEMIES[group.enemy]!.name}`).join(', ');
+        return `WAVE ${index + 1}: ${composition}`;
+      });
+      report.setText(`${map.name} · ${node.waves} waves · ${mutation.name}\n\n${lines.join('\n')}`);
+    };
+    nodeIndexes.forEach((index, tab) => {
+      const node = state.nodes[index]!;
+      const label = `NODE ${index + 1} · ${MAPS.find((map) => map.id === node.mapId)?.name ?? 'Map'}`;
+      const x = nodeIndexes.length === 1 ? W / 2 : 450 + tab * 380;
+      const button = add(this.add.rectangle(x, 170, 350, 44, 0x292750).setStrokeStyle(1, 0x63dcff).setInteractive({ useHandCursor: true }));
+      const text = add(this.add.text(x, 170, label, { fontFamily: 'Arial', fontSize: '12px', color: '#fff5d7', fontStyle: 'bold', align: 'center', wordWrap: { width: 325 } }).setOrigin(0.5).setInteractive({ useHandCursor: true }));
+      const choose = () => { selected = index; refresh(); };
+      button.on('pointerdown', choose); text.on('pointerdown', choose);
+    });
+    const back = add(this.add.rectangle(W / 2, 615, 220, 42, 0x315b60).setStrokeStyle(1, 0x75efc1).setInteractive({ useHandCursor: true }));
+    const backText = add(this.add.text(W / 2, 615, 'BACK TO REST STOP', { fontFamily: 'Arial', fontSize: '12px', color: '#fff5d7', fontStyle: 'bold' }).setOrigin(0.5).setInteractive({ useHandCursor: true }));
+    const goBack = () => this.showOdysseyRestStop();
+    back.on('pointerdown', goBack); backText.on('pointerdown', goBack);
+    refresh();
+  }
+
+  private settleOdyssey(retain: number, fullVictory: boolean): void {
+    const state = this.odysseyState;
+    if (!state) return;
+    this.clearOdysseyOverlay();
+    const baseXp = Math.floor(state.vaultXp * retain);
+    const bonusXp = fullVictory ? state.length === 3 ? 1000 : 2500 : 0;
+    const gems = Math.floor(state.vaultGems * retain) + (fullVictory ? state.length === 3 ? 15 : 40 : 0);
+    if (baseXp + bonusXp > 0) grantPlayerXp(this.registry, baseXp + bonusXp);
+    const progress = this.registry.get('mapProgress') as { gems: number; unlockedMaps: MapId[] };
+    progress.gems += gems; this.registry.set('mapProgress', progress);
+    const masteryFactor = retain;
+    for (const [towerId, amount] of Object.entries(state.vaultMastery)) {
+      const kept = Math.floor(amount * masteryFactor);
+      if (kept > 0) grantTowerXp(this.registry, towerId, kept);
+    }
+    this.registry.set('lastRunMasteryXp', Object.values(state.vaultMastery).reduce((sum, amount) => sum + Math.floor(amount * masteryFactor), 0));
+    this.registry.set('lastRunPlayerXp', baseXp + bonusXp);
+    this.registry.set('lastRunGems', gems);
+    this.registry.remove('odysseyState');
+    this.phase = fullVictory ? 'victory' : retain > 0 ? 'victory' : 'defeat';
+    this.run.phase = this.phase;
+    this.paused = false;
+    this.gridFeedback = fullVictory ? 'ODYSSEY COMPLETE · VAULT CLAIMED' : retain > 0 ? 'EXTRACTED · 75% OF VAULT CLAIMED' : 'ODYSSEY FAILED · VAULT LOST';
+    this.showOdysseyEndScreen(fullVictory, retain > 0, baseXp + bonusXp, gems);
+  }
+
+  private showOdysseyEndScreen(fullVictory: boolean, extracted: boolean, xp: number, gems: number): void {
+    this.add.rectangle(W / 2, H / 2, W, H, 0x071016, 0.84).setDepth(58).setInteractive();
+    this.add.rectangle(W / 2, H / 2, 570, 330, 0x201e40).setStrokeStyle(2, fullVictory ? 0x75efc1 : extracted ? 0xf4c86a : 0xef7e70).setDepth(59);
+    this.add.text(W / 2, 264, fullVictory ? 'ODYSSEY COMPLETE!' : extracted ? 'SAFE EXTRACTION' : 'EXPEDITION LOST', { fontFamily: 'Arial', fontSize: '27px', color: fullVictory || extracted ? '#75efc1' : '#ef7e70', fontStyle: 'bold', letterSpacing: 2 }).setOrigin(0.5).setDepth(60);
+    this.add.text(W / 2, 330, fullVictory ? 'Every map cleared. Your full vault is yours!' : extracted ? 'You made it out with 75% of your vault.' : 'The base fell. Your expedition vault was lost.', { fontFamily: 'Arial', fontSize: '16px', color: '#fff5d7', align: 'center' }).setOrigin(0.5).setDepth(60);
+    this.add.text(W / 2, 372, `+${xp.toLocaleString()} Player XP  ·  +${gems} gems  ·  +${Number(this.registry.get('lastRunMasteryXp') ?? 0).toLocaleString()} Tower Mastery XP`, { fontFamily: 'Arial', fontSize: '14px', color: '#c4c3e5', align: 'center', wordWrap: { width: 500 } }).setOrigin(0.5).setDepth(60);
+    const lobby = this.add.rectangle(W / 2, 455, 280, 46, 0x315b60).setStrokeStyle(1, 0x75efc1).setDepth(60).setInteractive({ useHandCursor: true });
+    this.add.text(W / 2, 455, 'RETURN TO LOBBY', { fontFamily: 'Arial', fontSize: '14px', color: '#fff5d7', fontStyle: 'bold' }).setOrigin(0.5).setDepth(61);
+    lobby.on('pointerdown', () => this.scene.start('Lobby'));
   }
 
   private hasPendingSpawns(): boolean {
@@ -4122,6 +4453,11 @@ export class GameScene extends Phaser.Scene {
   }
 
   private endRun(won: boolean): void {
+    if (this.odysseyMode) {
+      if (won) this.settleOdyssey(1, true);
+      else this.settleOdyssey(0, false);
+      return;
+    }
     this.registry.set('lastRunMasteryXp', [...this.runMasteryXp.values()].reduce((sum, value) => sum + value, 0));
     let playerXpAward = 0;
     let endlessGemAward = 0;
@@ -4146,8 +4482,18 @@ export class GameScene extends Phaser.Scene {
         this.registry.set('mapProgress', progress);
       }
     }
-    this.registry.set('lastRunGems', endlessGemAward);
-    if (won) {
+    if (won && this.draftMode === 'campaign') {
+      const cleared = Boolean(this.registry.get('draftCampaignCleared'));
+      this.firstClear = !cleared;
+      if (!cleared) {
+        playerXpAward = 500;
+        endlessGemAward = 10;
+        grantPlayerXp(this.registry, 500);
+        const progress = this.registry.get('mapProgress') as { gems: number; unlockedMaps: MapId[] };
+        progress.gems += 10; this.registry.set('mapProgress', progress);
+        this.registry.set('draftCampaignCleared', true);
+      } else { playerXpAward = 0; endlessGemAward = 0; }
+    } else if (won && this.draftMode === 'none') {
       const clearKey = `stage${this.campaignStage}Star${this.star}Cleared`;
       this.firstClear = !this.mapPreview && !this.registry.get(clearKey);
       if (this.firstClear) {
@@ -4168,14 +4514,15 @@ export class GameScene extends Phaser.Scene {
       }
     }
     this.registry.set('lastRunPlayerXp', playerXpAward);
+    this.registry.set('lastRunGems', endlessGemAward);
     this.phase = won ? 'victory' : 'defeat';
     this.run.phase = won ? 'victory' : 'defeat';
     this.run.baseHealth = this.baseHealth;
     this.run.coins = this.coins;
     this.paused = false;
-    this.statusLabel?.setText(won ? `STAGE COMPLETE\nAll ${this.totalWaves} waves survived!` : 'BASE LOST\nThe defense has fallen.');
+    this.statusLabel?.setText(won ? `${this.draftMode === 'campaign' ? 'DRAFT COMPLETE' : 'STAGE COMPLETE'}\nAll ${this.totalWaves} waves survived!` : 'BASE LOST\nThe defense has fallen.');
     this.statusLabel?.setColor(won ? '#a9e7c2' : '#ef7e70');
-    this.gridFeedback = won ? `STAGE ${this.campaignStage} CLEARED · $${this.coins} REMAINING` : this.endlessMode
+    this.gridFeedback = won ? `${this.draftMode === 'campaign' ? 'DRAFT' : 'STAGE'} COMPLETE · $${this.coins} REMAINING` : this.endlessMode
       ? `ENDLESS ENDED · WAVE ${this.wave} · +${playerXpAward} XP · +${endlessGemAward} GEMS`
       : `DEFEATED ON WAVE ${this.wave}`;
     this.updateHUD();
@@ -4186,18 +4533,22 @@ export class GameScene extends Phaser.Scene {
   private showVictoryScreen(): void {
     this.add.rectangle(W / 2, H / 2, W, H, 0x071016, 0.82).setDepth(20).setInteractive();
     this.add.rectangle(W / 2, H / 2, 460, 286, 0x203643).setStrokeStyle(2, COLORS.mint).setDepth(21);
-    this.add.text(W / 2, 270, `STAGE ${this.campaignStage} CLEARED`, { fontFamily: 'Arial', fontSize: '27px', color: '#a9e7c2', fontStyle: 'bold', letterSpacing: 2 }).setOrigin(0.5).setDepth(22);
+    this.add.text(W / 2, 270, this.draftMode === 'campaign' ? 'DRAFT CAMPAIGN CLEARED' : `STAGE ${this.campaignStage} CLEARED`, { fontFamily: 'Arial', fontSize: '27px', color: '#a9e7c2', fontStyle: 'bold', letterSpacing: 2 }).setOrigin(0.5).setDepth(22);
     const xpPerClear = this.star === 1 ? 500 : this.star === 2 ? 800 : 1200;
-    const clearNote = this.firstClear
+    const clearNote = this.draftMode === 'campaign'
+      ? this.firstClear ? 'FIRST CLEAR  ·  +500 PLAYER XP  ·  +10 GEMS' : 'Draft Campaign completed · first-clear reward already claimed'
+      : this.firstClear
       ? `FIRST CLEAR  ·  +${xpPerClear} PLAYER XP${this.campaignGemReward ? `  ·  STAR TIER COMPLETE  ·  +${this.campaignGemReward} GEMS` : ''}`
       : 'Stage replayed · no first-clear bonus';
-    this.add.text(W / 2, 319, `All ${this.totalWaves} waves survived at ${this.star} Star.\n$${this.coins} coins remaining.\n${clearNote}`, { fontFamily: 'Arial', fontSize: '16px', color: COLORS.cream, align: 'center', lineSpacing: 8 }).setOrigin(0.5).setDepth(22);
+    this.add.text(W / 2, 319, this.draftMode === 'campaign'
+      ? `All 15 waves survived with ${this.draftRoster.length} drafted towers.\n$${this.coins} coins remaining.\n${clearNote}`
+      : `All ${this.totalWaves} waves survived at ${this.star} Star.\n$${this.coins} coins remaining.\n${clearNote}`, { fontFamily: 'Arial', fontSize: '16px', color: COLORS.cream, align: 'center', lineSpacing: 8 }).setOrigin(0.5).setDepth(22);
     const lobby = this.add.rectangle(W / 2, 405, 270, 44, 0x2d4b58).setStrokeStyle(1, COLORS.mint).setDepth(22).setInteractive({ useHandCursor: true });
     this.add.text(W / 2, 405, 'RETURN TO LOBBY', { fontFamily: 'Arial', fontSize: '13px', color: COLORS.cream, fontStyle: 'bold', letterSpacing: 1 }).setOrigin(0.5).setDepth(23);
     const retry = this.add.rectangle(W / 2, 461, 270, 40, 0x182733).setStrokeStyle(1, 0x607c82).setDepth(22).setInteractive({ useHandCursor: true });
-    this.add.text(W / 2, 461, 'PLAY THIS STAGE AGAIN', { fontFamily: 'Arial', fontSize: '12px', color: COLORS.cream, fontStyle: 'bold', letterSpacing: 1 }).setOrigin(0.5).setDepth(23);
+    this.add.text(W / 2, 461, this.draftMode === 'campaign' ? 'START A NEW DRAFT' : 'PLAY THIS STAGE AGAIN', { fontFamily: 'Arial', fontSize: '12px', color: COLORS.cream, fontStyle: 'bold', letterSpacing: 1 }).setOrigin(0.5).setDepth(23);
     lobby.on('pointerdown', () => this.scene.start('Lobby'));
-    retry.on('pointerdown', () => this.scene.restart());
+    retry.on('pointerdown', () => { if (this.draftMode === 'campaign') this.registry.set('draftRoster', []); this.scene.restart(); });
   }
 
   private showDefeatScreen(): void {
@@ -4210,7 +4561,7 @@ export class GameScene extends Phaser.Scene {
     this.add.text(W / 2, 405, this.endlessMode ? 'RETRY ENDLESS' : `RETRY STAGE ${this.campaignStage}`, { fontFamily: 'Arial', fontSize: '13px', color: COLORS.cream, fontStyle: 'bold', letterSpacing: 1 }).setOrigin(0.5).setDepth(23);
     const lobby = this.add.rectangle(W / 2, 461, 270, 40, 0x182733).setStrokeStyle(1, 0x607c82).setDepth(22).setInteractive({ useHandCursor: true });
     this.add.text(W / 2, 461, 'RETURN TO LOBBY', { fontFamily: 'Arial', fontSize: '12px', color: COLORS.cream, fontStyle: 'bold', letterSpacing: 1 }).setOrigin(0.5).setDepth(23);
-    retry.on('pointerdown', () => this.scene.restart());
+    retry.on('pointerdown', () => { if (this.draftMode !== 'none') this.registry.set('draftRoster', []); this.scene.restart(); });
     lobby.on('pointerdown', () => this.scene.start('Lobby'));
   }
 
@@ -4858,7 +5209,7 @@ export class GameScene extends Phaser.Scene {
       .setText(this.skipCooldown > 0 ? `SKIP WAVE · ${Math.ceil(this.skipCooldown)}s` : 'SKIP WAVE');
     const activeMutations = CAMPAIGN_MUTATIONS.filter((mutation) => this.mutationStack(mutation.id) > 0)
       .map((mutation) => `${mutation.name} ×${this.mutationStack(mutation.id)}`);
-    this.modifierStatusLabel?.setText(activeMutations.length ? `ACTIVE MODIFIERS · ${activeMutations.length} · CLICK TO VIEW` : this.endlessModifiersEnabled ? 'MODIFIERS · NONE YET · CLICK TO VIEW' : 'STAGE 5 MODIFIERS · NONE YET');
+    this.modifierStatusLabel?.setText(activeMutations.length ? `ACTIVE MODIFIERS · ${activeMutations.length} · CLICK TO VIEW` : this.endlessModifiersEnabled ? 'MODIFIERS · NONE YET · CLICK TO VIEW' : this.odysseyMode ? 'ODYSSEY CONDITIONS · CLICK TO VIEW' : 'STAGE 5 MODIFIERS · NONE YET');
     this.selectionLabel?.setText(this.selectedTower?.spec.name ?? (this.placing ? (this.mysteryPlacing ? 'Placing Mystery Box' : `Placing ${this.currentTowerSpec.name}`) : 'No tower selected'));
     const showCancel = this.placing;
     const showDelete = Boolean(this.selectedTower) && !this.placing && !this.selectedTower?.noSell && !this.mutationStack('overchargedSells');
@@ -4910,8 +5261,8 @@ export class GameScene extends Phaser.Scene {
     // Mystery Boxes replace the normal tower roster for the full Endless
     // Mystery run and throughout Stage 4.
     const mysteryBoxReplacesRoster = this.isMysteryOnlyRun();
-    this.rosterNameLabel?.setText(mysteryBoxReplacesRoster ? 'MYSTERY BOX' : 'OPEN GRID');
-    const canAfford = currentUnlock.unlocked && this.coins >= this.currentTowerSpec.cost;
+    this.rosterNameLabel?.setText(mysteryBoxReplacesRoster ? 'MYSTERY BOX' : this.draftMode !== 'none' ? `DRAFT ROSTER · ${this.draftRoster.length}` : 'OPEN GRID');
+    const canAfford = (this.draftMode !== 'none' || currentUnlock.unlocked) && this.coins >= this.currentTowerSpec.cost;
     this.towerButton?.setStrokeStyle(1, canAfford ? RARITY_COLOR[this.currentTowerSpec.rarity] : 0xef7e9c).setFillStyle(canAfford ? 0x202c46 : 0x302436);
     this.upgradeButtons.forEach((button, pathIndex) => {
       const tower = this.selectedTower;

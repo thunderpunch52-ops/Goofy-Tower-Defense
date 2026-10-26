@@ -40,7 +40,7 @@ export class LobbyScene extends Phaser.Scene {
     };
     openProgression(466, 'TOWER MASTERY', 'mastery');
     openProgression(520, 'BESTIARY & SAVE CODE', 'bestiary');
-    this.add.text(62, 594, 'GOOFY DEFENSE  •  2.0.0', { fontFamily: 'Arial', fontSize: '13px', color: C.muted, lineSpacing: 7 });
+    this.add.text(62, 594, 'GOOFY DEFENSE  •  3.0.0', { fontFamily: 'Arial', fontSize: '13px', color: C.muted, lineSpacing: 7 });
 
     this.add.text(W / 2, 88, 'THE GREAT SNACK DEFENSE', { fontFamily: 'Trebuchet MS', fontSize: '17px', color: C.mint, fontStyle: 'bold', letterSpacing: 3 }).setOrigin(0.5);
     this.add.text(W / 2, 165, 'Save the snacks!', { fontFamily: 'Trebuchet MS', fontSize: '44px', color: C.cream, fontStyle: 'bold', stroke: '#ff6d9e', strokeThickness: 2, shadow: { offsetX: 0, offsetY: 3, color: '#0c0a20', blur: 5, fill: true } }).setOrigin(0.5);
@@ -214,5 +214,84 @@ export class LobbyScene extends Phaser.Scene {
     });
     startEndlessLabel.setInteractive({ useHandCursor: true }).on('pointerdown', () => startEndless.emit('pointerdown'));
     refreshMapChoice();
+
+    // The center of the lobby is the mode selector. Each choice opens its
+    // setup here, leaving the profile and map preview columns in place.
+    const centerMask = this.add.rectangle(640, 360, 620, 640, 0x17152f, 1).setStrokeStyle(2, 0x63dcff, 0.8);
+    centerMask.setDepth(20).setInteractive();
+    const modeTitle = this.add.text(640, 91, 'PICK YOUR ADVENTURE', { fontFamily: 'Trebuchet MS', fontSize: '25px', color: C.mint, fontStyle: 'bold', letterSpacing: 2 }).setOrigin(0.5).setDepth(21);
+    const modeHint = this.add.text(640, 130, 'Three ways to make a mess of the enemy plan.', { fontFamily: 'Arial', fontSize: '15px', color: C.muted }).setOrigin(0.5).setDepth(21);
+    const modeButtons: Array<Phaser.GameObjects.Rectangle | Phaser.GameObjects.Text> = [];
+    const setupObjects: Array<Phaser.GameObjects.Rectangle | Phaser.GameObjects.Text> = [];
+    const hideSetup = () => { setupObjects.forEach((object) => object.setVisible(false)); modeButtons.forEach((object) => object.setVisible(true)); modeTitle.setText('PICK YOUR ADVENTURE'); modeHint.setText('Three ways to make a mess of the enemy plan.'); };
+    const addModeCard = (y: number, title: string, detail: string, color: string, open: () => void) => {
+      const bg = this.add.rectangle(640, y, 500, 132, 0x201e40).setStrokeStyle(2, Phaser.Display.Color.HexStringToColor(color).color).setDepth(21).setInteractive({ useHandCursor: true });
+      const name = this.add.text(640, y - 22, title, { fontFamily: 'Trebuchet MS', fontSize: '30px', color, fontStyle: 'bold', letterSpacing: 2 }).setOrigin(0.5).setDepth(22);
+      const desc = this.add.text(640, y + 24, detail, { fontFamily: 'Arial', fontSize: '14px', color: C.muted, align: 'center', wordWrap: { width: 455 } }).setOrigin(0.5).setDepth(22);
+      [bg, name, desc].forEach((object) => { modeButtons.push(object); object.setInteractive({ useHandCursor: true }).on('pointerdown', open); });
+    };
+    const setupHeader = (heading: string, subtitle: string) => {
+      modeButtons.forEach((object) => object.setVisible(false));
+      modeTitle.setText(heading); modeHint.setText(subtitle);
+      const back = this.add.rectangle(415, 91, 90, 34, 0x2b2856).setStrokeStyle(1, 0x63dcff).setDepth(23).setInteractive({ useHandCursor: true });
+      const backText = this.add.text(415, 91, '‹ BACK', { fontFamily: 'Arial', fontSize: '13px', color: C.cream, fontStyle: 'bold' }).setOrigin(0.5).setDepth(24).setInteractive({ useHandCursor: true });
+      back.on('pointerdown', hideSetup); backText.on('pointerdown', hideSetup); setupObjects.push(back, backText);
+    };
+    const setupButton = (x: number, y: number, width: number, label: string, color: number, callback: () => void) => {
+      const bg = this.add.rectangle(x, y, width, 48, color).setStrokeStyle(1, 0xfff5d7).setDepth(23).setInteractive({ useHandCursor: true });
+      const text = this.add.text(x, y, label, { fontFamily: 'Arial', fontSize: '14px', color: C.cream, fontStyle: 'bold', align: 'center', wordWrap: { width: width - 14 } }).setOrigin(0.5).setDepth(24).setInteractive({ useHandCursor: true });
+      bg.on('pointerdown', callback); text.on('pointerdown', callback); setupObjects.push(bg, text); return { bg, text };
+    };
+    const launch = (runMode: string, extra: Record<string, unknown> = {}) => {
+      this.registry.remove('odysseyState');
+      if (runMode.startsWith('draft')) { this.registry.set('campaignStage', 1); this.registry.set('selectedStar', 1); }
+      if (runMode === 'odyssey') this.registry.set('selectedStar', 1);
+      this.registry.set('runMode', runMode);
+      Object.entries(extra).forEach(([key, value]) => this.registry.set(key, value));
+      this.scene.start('Game');
+    };
+    addModeCard(232, 'CAMPAIGN', 'Choose a stage and star level. Build your permanent progress.', C.gold, () => {
+      setupHeader('CAMPAIGN SETUP', 'Pick a stage and star level, then jump into the fight.');
+      let stage = Math.max(1, Math.min(5, Number(this.registry.get('campaignStage') ?? 1)));
+      let star = Math.max(1, Math.min(3, Number(this.registry.get('selectedStar') ?? 1)));
+      const stageLabel = this.add.text(640, 244, '', { fontFamily: 'Trebuchet MS', fontSize: '30px', color: C.cream, fontStyle: 'bold' }).setOrigin(0.5).setDepth(22); setupObjects.push(stageLabel);
+      const info = this.add.text(640, 290, '', { fontFamily: 'Arial', fontSize: '15px', color: C.muted, align: 'center' }).setOrigin(0.5).setDepth(22); setupObjects.push(info);
+      const stageAllowed = (value: number) => value === 1 || Boolean(this.registry.get(`stage${value - 1}Star${star}Cleared`));
+      const starAllowed = (value: number) => value === 1 || Boolean(this.registry.get(`campaignStar${value}Unlocked`));
+      const refresh = () => {
+        const waves = stage <= 3 ? stage * 5 : stage === 4 && star < 3 ? 10 : 15;
+        stageLabel.setText(`${stageAllowed(stage) ? '' : '🔒 ' }STAGE ${stage}  ·  ${star} STAR`);
+        info.setText(`${waves} waves  ·  ${MAPS.find((m) => m.campaignStage === stage)?.name ?? 'Campaign map'}${stageAllowed(stage) ? '' : `\nClear Stage ${stage - 1} at ${star} Star to unlock this stage.`}`);
+      };
+      setupButton(485, 354, 64, '‹', 0x2b2856, () => { stage = Math.max(1, stage - 1); refresh(); });
+      setupButton(795, 354, 64, '›', 0x2b2856, () => { stage = Math.min(5, stage + 1); refresh(); });
+      [1, 2, 3].forEach((value, index) => setupButton(500 + index * 140, 430, 118, `${value} STAR`, 0x2b2856, () => {
+        if (starAllowed(value)) { star = value; refresh(); return; }
+        const complete = Array.from({ length: 5 }, (_, i) => i + 1).every((s) => Boolean(this.registry.get(`stage${s}Star${value - 1}Cleared`)));
+        const progress = this.registry.get('mapProgress') as { gems: number; unlockedMaps: MapId[] };
+        if (complete && progress.gems >= 20) { progress.gems -= 20; this.registry.set('mapProgress', progress); this.registry.set(`campaignStar${value}Unlocked`, true); star = value; stage = 1; refresh(); }
+        else info.setText(complete ? `Need 20 gems to unlock Star ${value}.` : `Clear all five Star ${value - 1} stages to unlock Star ${value}.`);
+      }));
+      setupButton(640, 526, 300, 'START CAMPAIGN', 0x315b60, () => {
+        if (!starAllowed(star) || !stageAllowed(stage)) { info.setText('Clear the previous stage in this Star tier to unlock this stage.'); return; }
+        this.registry.set('campaignStage', stage); this.registry.set('selectedStar', star); launch('campaign');
+      });
+      refresh();
+    });
+    addModeCard(390, 'DRAFT', 'Choose a fresh tower roster as the run unfolds.', C.blue, () => {
+      setupHeader('DRAFT MODE', 'Draft three starter towers. New picks arrive as you clear waves.');
+      setupButton(640, 290, 420, 'STANDARD DRAFT CAMPAIGN  ·  15 WAVES', 0x315b60, () => launch('draft-campaign', { draftRoster: [] }));
+      setupButton(640, 370, 420, 'DRAFT ENDLESS  ·  KEEP DRAFTING', 0x315b60, () => launch('draft-endless', { draftRoster: [] }));
+      const note = this.add.text(640, 455, 'Three starter picks · bonus picks at Waves 5 and 10\nEndless keeps offering a new tower every five waves.', { fontFamily: 'Arial', fontSize: '15px', color: C.muted, align: 'center', lineSpacing: 9 }).setOrigin(0.5).setDepth(22); setupObjects.push(note);
+    });
+    addModeCard(548, 'TOWER ODYSSEY', 'Travel through connected maps. Heal, prepare, or extract between nodes.', C.gold, () => {
+      setupHeader('TOWER ODYSSEY', 'Your base health and choices carry across every map.');
+      setupButton(640, 290, 420, 'MINI ODYSSEY  ·  3 MAPS', 0x315b60, () => launch('odyssey', { odysseyLength: 3 }));
+      setupButton(640, 370, 420, 'GRAND ODYSSEY  ·  5 MAPS', 0x315b60, () => launch('odyssey', { odysseyLength: 5 }));
+      const note = this.add.text(640, 455, 'Rewards stay in a vault until you extract or finish.\nA wipeout loses the vault; extraction keeps 75%.', { fontFamily: 'Arial', fontSize: '15px', color: C.muted, align: 'center', lineSpacing: 9 }).setOrigin(0.5).setDepth(22); setupObjects.push(note);
+    });
+    // Keep the legacy campaign picker below the mask for its progression
+    // state; the new central setup opens the same choices in a larger layout.
+    centerMask.setDepth(20);
   }
 }
