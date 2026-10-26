@@ -106,12 +106,14 @@ export function endlessThreatForEnemy(key: EnemyKey): EndlessThreat {
 
 export function endlessWaveBudget(wave: number): number {
   const n = Math.max(0, Math.floor(wave) - 15);
-  return 100 + 25 * n + 3 * n * n;
+  // Keep the wave sender's credit curve gradual so boss counts and elite
+  // density do not jump sharply during the first endless milestones.
+  return 100 + 15 * n + n * n;
 }
 
 export function endlessHpMultiplier(wave: number): number {
   const n = Math.max(0, wave - 15);
-  return (1 + 0.15 * n) * 1.05 ** n;
+  return 1.06 ** n;
 }
 
 export function endlessLeakDamage(base: number, wave: number, threat: EndlessThreat): number {

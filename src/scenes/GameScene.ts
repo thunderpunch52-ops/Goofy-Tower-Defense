@@ -1295,37 +1295,49 @@ export class GameScene extends Phaser.Scene {
       remaining -= ENDLESS_MEGA_BOSS_COST;
     }
 
-    // Treat each queued enemy as an independent target. This allows a batch
-    // such as ten scooters to contain both elite and ordinary scooters.
-    const targetCount = this.waveGroups.reduce((sum, group) => sum + group.count, 0);
-    const order = Array.from({ length: targetCount }, (_, index) => index);
-    for (let index = order.length - 1; index > 0; index -= 1) {
-      const swap = Math.floor(random() * (index + 1));
-      [order[index], order[swap]] = [order[swap]!, order[index]!];
-    }
+    // Treat each queued enemy as an independent target. Assign in threat
+    // order, so common enemies receive the first traits and large enemies do
+    // not soak up the full reserve while the rest of the wave stays ordinary.
+    const targets: Array<{ index: number; enemy: EnemyKey; priority: number }> = [];
     let targetIndex = 0;
-    for (const group of this.waveGroups) {
-      for (let local = 0; local < group.count; local += 1) {
-        const globalIndex = targetIndex++;
-        const eliteOrder = [...ENDLESS_ELITES].sort((a, b) => a.points - b.points);
-        const eligible = eliteOrder.filter((elite) => elite.points <= remaining);
-        if (!eligible.length) continue;
-        // One elite per target on the first pass produces readable mixed
-        // groups; leftover budget can add extra stacked traits afterward.
-        const target = order[globalIndex] ?? globalIndex;
-        const elite = eligible[Math.floor(random() * eligible.length)]!;
-        this.endlessAssignments.set(target, [elite.id]);
-        remaining -= elite.points;
+    const threatPriority = (enemy: EnemyKey): number => {
+      if (enemy === 'doomsdayClockworkGoliath' || enemy === 'abyssalJunkHydra') return 6;
+      switch (endlessThreatForEnemy(enemy)) {
+        case 'Basic': return 0;
+        case 'Fast': return 1;
+        case 'Heavy': return 2;
+        case 'Unique': return 3;
+        case 'Mini-Boss': return 4;
+        case 'Boss': return 5;
       }
+    };
+    for (const group of this.waveGroups) for (let local = 0; local < group.count; local += 1) {
+      targets.push({ index: targetIndex++, enemy: group.enemy, priority: threatPriority(group.enemy) });
     }
-    while (remaining >= Math.min(...ENDLESS_ELITES.map((elite) => elite.points)) && targetCount > 0) {
+    targets.sort((a, b) => a.priority - b.priority || random() - 0.5);
+
+    const cheapestElite = Math.min(...ENDLESS_ELITES.map((elite) => elite.points));
+    for (const target of targets) {
+      if (remaining < cheapestElite) break;
       const eligible = ENDLESS_ELITES.filter((elite) => elite.points <= remaining);
       const elite = eligible[Math.floor(random() * eligible.length)]!;
-      const target = Math.floor(random() * targetCount);
-      const loadout = this.endlessAssignments.get(target) ?? [];
-      loadout.push(elite.id);
-      this.endlessAssignments.set(target, loadout);
+      this.endlessAssignments.set(target.index, [elite.id]);
       remaining -= elite.points;
+    }
+
+    // Only consider stacking after every queued enemy has received one elite.
+    // Extra traits then cycle back through the same threat-priority order.
+    if (targets.every((target) => this.endlessAssignments.has(target.index))) {
+      let cursor = 0;
+      while (remaining >= cheapestElite && targets.length > 0) {
+        const eligible = ENDLESS_ELITES.filter((elite) => elite.points <= remaining);
+        const elite = eligible[Math.floor(random() * eligible.length)]!;
+        const target = targets[cursor % targets.length]!;
+        const loadout = this.endlessAssignments.get(target.index)!;
+        loadout.push(elite.id);
+        remaining -= elite.points;
+        cursor += 1;
+      }
     }
   }
 
