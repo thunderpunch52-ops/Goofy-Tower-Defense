@@ -468,7 +468,7 @@ export class ProgressionScene extends Phaser.Scene {
       this.bestiaryDetail?.setText(`UNKNOWN ENTRY · ${index + 1}\n\nDefeat this enemy type in a run to add its name and stats to the Bestiary.`);
       return;
     }
-    this.bestiaryDetail?.setText(`${enemy.name}\n\nHealth: ${enemy.hp.toLocaleString()}\nSpeed: ${enemy.speed}\nArmor: ${enemy.armor}\nHyperarmor: ${enemy.hyperarmor}\nLeak damage: ${enemy.leak}\nBounty: ${enemy.bounty}\n${enemy.boss ? 'BOSS' : enemy.miniboss ? 'STRONG · MINI-BOSS' : 'ENEMY'}${enemy.ability ? `\nAbility: ${enemy.ability}` : ''}`);
+    this.bestiaryDetail?.setText(`${enemy.name}\n\nHealth: ${enemy.hp.toLocaleString()}\nSpeed: ${enemy.speed}\nArmor: ${enemy.armor}\nHyperarmor: ${enemy.hyperarmor}\nLeak damage: ${enemy.leak}\nBounty: ${enemy.bounty}\n${enemy.boss ? 'BOSS' : enemy.miniboss ? 'STRONG · MINI-BOSS' : 'ENEMY'}${enemy.description ? `\n\n${enemy.description}` : enemy.ability ? `\nAbility: ${enemy.ability}` : ''}`);
   }
 
   private refreshBestiaryCards(): void {

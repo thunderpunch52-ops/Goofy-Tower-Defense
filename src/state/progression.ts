@@ -104,7 +104,9 @@ const CAMPAIGN_TOWER_UNLOCKS: Record<string, { stage: number; star: number }> = 
   giantMechTeddyBear: { stage: 5, star: 3 },
 };
 const LEVEL_TOWER_UNLOCKS: Record<string, number> = { anvilTrapdoor: 2, discoTurret: 5, catLaserPointer: 10, cosmicRoomba: 15 };
-const GEM_TOWER_UNLOCKS: Record<string, number> = { cardboardFortress: 20 };
+const GEM_TOWER_UNLOCKS: Record<string, number> = {
+  cardboardFortress: 20, bubbleBlower: 10, lawnAerator: 12, staplerTurret: 25, teslaCoilLamp: 60,
+};
 const CAMPAIGN_TOWER_UNLOCKS_ADDED: Record<string, { stage: number; star: number }> = {
   arcadeClawMachine: { stage: 4, star: 2 }, sentientMicrowaveOven: { stage: 3, star: 3 }, hydraulicCarCrusher: { stage: 1, star: 3 },
 };
@@ -114,6 +116,15 @@ export function towerUnlocked(registry: RegistryLike, towerId: string): boolean 
   if (towerId === 'angryPigeon') return true;
   const importedUnlocks = registry.get('towerUnlocks') as string[] | undefined;
   if (importedUnlocks?.includes(towerId)) return true;
+  if (towerId === 'saltShaker' && towerMastery(registry, 'unstableToasterLauncher').level >= 3) return true;
+  if (towerId === 'deskFan' && Number(registry.get('miniOdysseyClears') ?? 0) >= 5) return true;
+  if (towerId === 'espressoMachine' && Number(registry.get('draftEndlessBestWave') ?? 0) >= 25) return true;
+  if (towerId === 'prismMirror' && Number(registry.get('odysseyExtractions') ?? 0) >= 3) return true;
+  if (towerId === 'glueCannon') {
+    const commonMasteries = TOWERS.filter((tower) => tower.rarity === 'Common' && towerMastery(registry, tower.id).level >= 10).length;
+    if (commonMasteries >= 3) return true;
+  }
+  if (towerId === 'quantumPendulum' && Boolean(registry.get('grandOdysseyVictory'))) return true;
   const campaign = CAMPAIGN_TOWER_UNLOCKS[towerId] ?? CAMPAIGN_TOWER_UNLOCKS_ADDED[towerId];
   if (campaign) return Boolean(registry.get(`stage${campaign.stage}Star${campaign.star}Cleared`));
   const level = LEVEL_TOWER_UNLOCKS[towerId] ?? LEVEL_TOWER_UNLOCKS_ADDED[towerId];
@@ -121,7 +132,7 @@ export function towerUnlocked(registry: RegistryLike, towerId: string): boolean 
 }
 
 interface SavePayload {
-  version: 1 | 2 | 3;
+  version: 1 | 2 | 3 | 4;
   mapProgress: { gems: number; unlockedMaps: MapId[] };
   towerUnlocks: string[];
   towerMastery: Record<string, TowerMastery>;
@@ -132,6 +143,7 @@ interface SavePayload {
   playerLevel: number;
   bestiaryUnlocks: EnemyKey[];
   unlockedGameSpeeds?: number[];
+  expansionMilestones?: { miniOdysseyClears: number; draftEndlessBestWave: number; odysseyExtractions: number; grandOdysseyVictory: boolean };
 }
 
 function payloadFromRegistry(registry: RegistryLike): SavePayload {
@@ -147,7 +159,7 @@ function payloadFromRegistry(registry: RegistryLike): SavePayload {
     }
   }
   return {
-    version: 3,
+    version: 4,
     mapProgress: { gems: Math.max(0, Math.floor(mapProgress.gems)), unlockedMaps: [...mapProgress.unlockedMaps] },
     towerUnlocks: TOWERS.filter((tower) => towerUnlocked(registry, tower.id)).map((tower) => tower.id),
     towerMastery: structuredClone(registry.get('towerMastery') as SavePayload['towerMastery']),
@@ -158,6 +170,12 @@ function payloadFromRegistry(registry: RegistryLike): SavePayload {
     playerLevel: Number(registry.get('playerLevel') ?? 1),
     bestiaryUnlocks: [...(registry.get('bestiaryUnlocks') as EnemyKey[])],
     unlockedGameSpeeds: [...(registry.get('unlockedGameSpeeds') as number[])],
+    expansionMilestones: {
+      miniOdysseyClears: Math.max(0, Math.floor(Number(registry.get('miniOdysseyClears') ?? 0))),
+      draftEndlessBestWave: Math.max(0, Math.floor(Number(registry.get('draftEndlessBestWave') ?? 0))),
+      odysseyExtractions: Math.max(0, Math.floor(Number(registry.get('odysseyExtractions') ?? 0))),
+      grandOdysseyVictory: Boolean(registry.get('grandOdysseyVictory')),
+    },
   };
 }
 
@@ -173,7 +191,7 @@ export function importProgressCode(registry: RegistryLike, code: string): void {
   const binary = atob(code.slice(4).trim());
   const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
   const data = JSON.parse(new TextDecoder().decode(bytes)) as SavePayload;
-  if ((data.version !== 1 && data.version !== 2 && data.version !== 3) || !data.mapProgress || !Array.isArray(data.mapProgress.unlockedMaps) || !Array.isArray(data.towerUnlocks)
+  if ((data.version !== 1 && data.version !== 2 && data.version !== 3 && data.version !== 4) || !data.mapProgress || !Array.isArray(data.mapProgress.unlockedMaps) || !Array.isArray(data.towerUnlocks)
     || !data.towerMastery || !Array.isArray(data.campaignClears) || !Array.isArray(data.gemRewards) || !Array.isArray(data.bestiaryUnlocks)) {
     throw new Error('The save code is incomplete or damaged.');
   }
@@ -212,6 +230,10 @@ export function importProgressCode(registry: RegistryLike, code: string): void {
   const unlockedSpeeds = new Set(savedSpeeds.filter((speed) => speed === 3 || speed === 4));
   if (!unlockedSpeeds.has(3)) unlockedSpeeds.delete(4);
   registry.set('unlockedGameSpeeds', [...unlockedSpeeds]);
+  registry.set('miniOdysseyClears', Math.max(0, Math.floor(Number(data.expansionMilestones?.miniOdysseyClears ?? 0))));
+  registry.set('draftEndlessBestWave', Math.max(0, Math.floor(Number(data.expansionMilestones?.draftEndlessBestWave ?? 0))));
+  registry.set('odysseyExtractions', Math.max(0, Math.floor(Number(data.expansionMilestones?.odysseyExtractions ?? 0))));
+  registry.set('grandOdysseyVictory', Boolean(data.expansionMilestones?.grandOdysseyVictory));
   registry.set('runMode', 'campaign');
 }
 
@@ -222,6 +244,12 @@ function PhaserLikeInt(value: unknown, min: number, max: number): number {
 export function towerUnlockRequirement(towerId: string): string {
   const gemCost = GEM_TOWER_UNLOCKS[towerId];
   if (gemCost) return `Spend ${gemCost} gems`;
+  const milestoneRequirements: Record<string, string> = {
+    saltShaker: 'Reach Toaster Mastery Level 3', deskFan: 'Complete 5 Mini Odysseys',
+    espressoMachine: 'Reach Wave 25 in Draft Endless', prismMirror: 'Extract from 3 Odysseys',
+    glueCannon: 'Reach Mastery Level 10 on 3 Common towers', quantumPendulum: 'Win a Grand Odyssey',
+  };
+  if (milestoneRequirements[towerId]) return milestoneRequirements[towerId]!;
   const campaign = CAMPAIGN_TOWER_UNLOCKS[towerId] ?? CAMPAIGN_TOWER_UNLOCKS_ADDED[towerId];
   if (campaign) return `Clear Star ${campaign.star} · Stage ${campaign.stage}`;
   const level = LEVEL_TOWER_UNLOCKS[towerId] ?? LEVEL_TOWER_UNLOCKS_ADDED[towerId];

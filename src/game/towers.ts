@@ -1,9 +1,10 @@
 export type TowerRarity = 'Common' | 'Rare' | 'Epic' | 'Legendary';
-export type TowerAttackType = 'single' | 'push' | 'splash' | 'sticky' | 'supportLaser' | 'trap' | 'chain' | 'burnAura' | 'beam' | 'freeze' | 'pierce' | 'teddy' | 'roomba' | 'claw' | 'trafficLight' | 'fortress';
+export type TowerAttackType = 'single' | 'push' | 'splash' | 'sticky' | 'supportLaser' | 'trap' | 'chain' | 'burnAura' | 'beam' | 'freeze' | 'pierce' | 'teddy' | 'roomba' | 'claw' | 'trafficLight' | 'fortress' | 'bubble' | 'salt' | 'aerator' | 'fan' | 'espresso' | 'prism' | 'glue' | 'pendulum';
 export interface UpgradeTier { rank: number; name: string; cost: number; description: string }
 export interface TowerUpgradePath { name: string; tiers: UpgradeTier[] }
 export interface TowerSpec { id: string; name: string; rarity: TowerRarity; footprint: number; cost: number; role: string; damage: number; attackRate: number; range: number; attackType: TowerAttackType; color: number; paths: TowerUpgradePath[] }
 import { ADDED_TOWERS } from './addedTowers';
+import { EXPANSION_TOWERS } from './expansionTowers';
 
 const ORIGINAL_TOWERS = [
   {
@@ -2192,4 +2193,4 @@ const ORIGINAL_TOWERS = [
   }
 ] as const satisfies readonly TowerSpec[];
 
-export const TOWERS = [...ORIGINAL_TOWERS, ...ADDED_TOWERS] as const satisfies readonly TowerSpec[];
+export const TOWERS = [...ORIGINAL_TOWERS, ...ADDED_TOWERS, ...EXPANSION_TOWERS] as const satisfies readonly TowerSpec[];

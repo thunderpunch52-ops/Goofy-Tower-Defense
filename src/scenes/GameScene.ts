@@ -4,7 +4,7 @@ import { BOARD_COLUMNS, BOARD_ROWS, CAMPAIGN_MAPS, createMapRoute, getMap, getMa
 import { TOWERS, type TowerSpec, type UpgradeTier } from '../game/towers';
 import { ENDLESS_ELITES, ENDLESS_MEGA_BOSS_COST, endlessBloodPactStages, endlessBountyMultiplier, endlessEliteSpec, endlessEliteStats, endlessHermesCrowdControlCharges, endlessHpMultiplier, endlessLeakDamage, endlessEnemyRosterCost, endlessMegaBossDamageLimit, endlessMegaBossShield, endlessSiphonSlowPerHit, endlessThreatForEnemy, endlessWaveBudget, endlessWaveEnemyBudget, generateEndlessWave, type EndlessEliteId, type EndlessThreat } from '../game/endless';
 import { createRunSession } from '../state/runSession';
-import { grantPlayerXp, grantTowerXp, initializeProgress, towerMastery, towerUnlocked, unlockBestiaryEntry } from '../state/progression';
+import { grantPlayerXp, grantTowerXp, initializeProgress, towerMastery, towerUnlocked, towerUnlockRequirement, unlockBestiaryEntry } from '../state/progression';
 
 const W = 1280;
 const H = 720;
@@ -17,13 +17,13 @@ type Priority = typeof PRIORITIES[number];
 const RARITY_COLOR: Record<TowerSpec['rarity'], number> = { Common: 0x8fd3ae, Rare: 0x6fc8e8, Epic: 0xb98cf5, Legendary: 0xf4c86a };
 const RARITY_ORDER = ['Common', 'Rare', 'Epic', 'Legendary'] as const;
 const ROSTER_TOWERS = [...TOWERS].sort((a, b) => RARITY_ORDER.indexOf(a.rarity) - RARITY_ORDER.indexOf(b.rarity));
-const PHYSICAL_PROJECTILE_TOWER_IDS = new Set(['lawnDartGnome', 'leafBlowerGuy', 'waterBalloonSlingshot', 'stickyBubblegumDispenser', 'angryPigeon', 'squeakyRubberDuckCannon', 'unstableToasterLauncher', 'sodaMachineMech', 'arcadeClawMachine', 'hydraulicCarCrusher']);
+const PHYSICAL_PROJECTILE_TOWER_IDS = new Set(['lawnDartGnome', 'leafBlowerGuy', 'waterBalloonSlingshot', 'stickyBubblegumDispenser', 'angryPigeon', 'squeakyRubberDuckCannon', 'unstableToasterLauncher', 'sodaMachineMech', 'arcadeClawMachine', 'hydraulicCarCrusher', 'staplerTurret', 'lawnAerator']);
 
 interface PlacedTower {
   tile: Tile; spec: TowerSpec; sprite: Phaser.GameObjects.Rectangle; art: Phaser.GameObjects.Graphics; label: Phaser.GameObjects.Text; spentCoins: number;
-  lastTargetId?: number; cooldown: number; priority: Priority; chosenPath?: number;
+  lastTargetId?: number; cooldown: number; priority: Priority; aimAngle: number; chosenPath?: number;
   ranks: [number, number, number]; totalUpgrades: number; beamLockTime: number;
-  damageMultiplier: number; rangeMultiplier: number; attackSpeedMultiplier: number; baseAttackSpeedMultiplier: number;
+  damageMultiplier: number; damageAuraMultiplier: number; rangeMultiplier: number; attackSpeedMultiplier: number; baseAttackSpeedMultiplier: number;
   blastMultiplier: number; slowBonus: number; slowDurationMultiplier: number; pushBonus: number;
   stunChance: number; supportPowerMultiplier: number; pigeonAuraBonus: number; coinBonusOnStick: number;
   burnDpsBonus: number; passiveSlow: number; auraSlow: number; nearbyFireRateBonus: number; trackingMultiplier: number;
@@ -49,18 +49,19 @@ interface ActiveEnemy {
   slowUntil: number; slowAmount: number; slowSource?: PlacedTower; reverseMomentumUntil: number;
   burnUntil: number; burnDps: number; burnTick: number; burnSource?: PlacedTower; stunUntil: number;
   freezeUntil: number; unfreezeSlowPending: boolean; unfreezeSlowSource?: PlacedTower; wetUntil: number;
-  ccImmuneUntil: number; speedBoostUntil: number; abilityTimer: number; abilitySlowUntil: number; abilitySlowAmount: number; suctionUntil: number; triggeredThresholds: Set<number>;
+  ccImmuneUntil: number; speedBoostUntil: number; speedBoostAmount: number; abilityTimer: number; abilitySlowUntil: number; abilitySlowAmount: number; suctionUntil: number; triggeredThresholds: Set<number>;
   stunImmuneUntil: number; pushImmuneUntil: number;
   roombaPulledUntil: number;
-  armorShred: number; armorShredUntil: number; hyperarmorShredUntil: number; guanoSlipUntil: number; guanoSlipCooldownUntil: number; guanoSlipFloor: number;
+  armorShred: number; armorShredUntil: number; armorFlatShred: number; hyperarmorShredUntil: number; guanoSlipUntil: number; guanoSlipCooldownUntil: number; guanoSlipFloor: number;
   guanoPoisonUntil: number; guanoPoisonTick: number; guanoPoisonStacks: number;
   hyperarmorShred: number; damageTakenMultiplier: number; damageTakenUntil: number;
   physicalDamageTakenMultiplier: number; physicalDamageTakenUntil: number; passiveStacks: Map<string, number>;
+  thermalDamageTakenMultiplier: number; thermalDamageTakenUntil: number;
   clawArmorShred: number; clawArmorShredUntil: number;
   trafficHyperarmorReduction: number; trafficHyperarmorUntil: number;
   trafficWrongWayReady: number;
 }
-interface SoapPuddle { x: number; y: number; expiresAt: number; sprite: Phaser.GameObjects.Rectangle; slows: boolean; source?: PlacedTower }
+interface SoapPuddle { x: number; y: number; expiresAt: number; sprite: Phaser.GameObjects.Rectangle; slows: boolean; source?: PlacedTower; speedBonus?: number; radioactive?: boolean }
 interface GuanoPuddle { progress: number; route: Tile[]; expiresAt: number; sprite: Phaser.GameObjects.Arc; tower: PlacedTower }
 interface TrackSpike { progress: number; route: Tile[]; expiresAt: number; tickIn: number; sprite: Phaser.GameObjects.Graphics; tower: PlacedTower }
 interface TrackResidue { progress: number; route: Tile[]; expiresAt: number; tickIn: number; sprite: Phaser.GameObjects.Graphics; tower: PlacedTower; slow: number; burn: boolean; armorShred: boolean; hyperarmorShred: boolean; damageTaken: boolean; damagePerSecond: number; explode: boolean; trap: boolean; hitEnemyIds: Set<number> }
@@ -111,6 +112,25 @@ const CAMPAIGN_MUTATIONS: CampaignMutation[] = [
   { id: 'reverseMomentum', name: 'Reverse Momentum', description: 'When a tower-applied slow expires, the enemy moves 10% faster for 1 second.', side: 'UNIQUE', stackCap: 1, stackable: false },
   { id: 'echoProjectiles', name: 'Echo Projectiles', description: 'Every tenth original attack repeats as an exact copy.', side: 'UNIQUE', stackCap: 1, stackable: false },
   { id: 'mutationRoulette', name: 'Mutation Roulette', description: 'On acquisition, remove one stack or effect from another random active modifier.', side: 'UNIQUE', stackCap: 1, stackable: false },
+  { id: 'glassCannonEconomy', name: 'Glass Cannon Economy', description: '+50% tower damage; placement and upgrade costs +35%.', side: 'GOOD', stackCap: 1, stackable: false },
+  { id: 'overclockedAssembly', name: 'Overclocked Assembly', description: '+40% tower attack speed; −15% range.', side: 'GOOD', stackCap: 1, stackable: false },
+  { id: 'goldenCurse', name: 'Golden Curse', description: 'Enemies give double bounty, but spawn a fast 1-HP Coin-Geist when defeated.', side: 'BAD', stackCap: 1, stackable: false },
+  { id: 'doubleEdgedRange', name: 'Double-Edged Range', description: 'Support/utility towers gain +100% range; offense towers lose 20% attack speed.', side: 'BAD', stackCap: 1, stackable: false },
+  { id: 'ironRain', name: 'Iron Rain', description: 'Enemies gain +5 Armor and +25% Hyperarmor.', side: 'HELL', stackCap: 1, stackable: false },
+  { id: 'chronoInstability', name: 'Chrono Instability', description: 'Every 15 seconds: enemies move 150% faster and towers attack 25% slower for 5 seconds.', side: 'HELL', stackCap: 1, stackable: false },
+  { id: 'antiMagicField', name: 'Anti-Magic Field', description: 'Towers cannot slow, stun, freeze, or knock back enemies.', side: 'HELL', stackCap: 1, stackable: false },
+  { id: 'resourceScarcity', name: 'Resource Scarcity', description: 'Wave payouts and carried coins are reduced by 60%.', side: 'HELL', stackCap: 1, stackable: false },
+  { id: 'emergencyBreakdown', name: 'Emergency Breakdown', description: 'Every 5 waves, a high-tier tower breaks down until repaired for $300.', side: 'HELL', stackCap: 1, stackable: false },
+  { id: 'hivemindSwarm', name: 'Hivemind Swarm', description: 'Each enemy defeat gives surviving enemies +5% speed for 3 seconds.', side: 'HELL', stackCap: 1, stackable: false },
+  { id: 'eclipseOfTheSun', name: 'Eclipse of the Sun', description: 'All tower ranges are reduced by 2 tiles (minimum 1).', side: 'HELL', stackCap: 1, stackable: false },
+  { id: 'pinballAlley', name: 'Pinball Alley', description: 'Missed attacks can ricochet from nearby map edges and hit at 50% damage.', side: 'UNIQUE', stackCap: 1, stackable: false },
+  { id: 'radioactiveFallout', name: 'Radioactive Fallout', description: 'Defeated enemies leave 5-second poison puddles; enemies in them take damage and move 15% faster.', side: 'UNIQUE', stackCap: 1, stackable: false },
+  { id: 'quantumGrid', name: 'Quantum Grid', description: 'Every third wave, eligible towers randomly swap positions.', side: 'UNIQUE', stackCap: 1, stackable: false },
+  { id: 'inflationaryMarket', name: 'Inflationary Market', description: 'Each placed copy raises that tower type’s next placement cost by 20%.', side: 'UNIQUE', stackCap: 1, stackable: false },
+  { id: 'overchargeCascade', name: 'Overcharge Cascade', description: 'Selling a tower releases a blast based on half its total coin investment.', side: 'UNIQUE', stackCap: 1, stackable: false },
+  { id: 'dynamicTerrain', name: 'Dynamic Terrain', description: 'Every 5 waves, obstacles shift to new empty cells.', side: 'UNIQUE', stackCap: 1, stackable: false },
+  { id: 'highEnergyNetwork', name: 'High Energy Network', description: 'Adjacent copies of the same tower grant up to +40% attack speed.', side: 'UNIQUE', stackCap: 1, stackable: false },
+  { id: 'bountyHuntersMark', name: 'Bounty Hunter’s Mark', description: 'One enemy per wave has +100% HP and grants +5 Gems when defeated.', side: 'UNIQUE', stackCap: 1, stackable: false },
 ];
 
 export class GameScene extends Phaser.Scene {
@@ -140,6 +160,7 @@ export class GameScene extends Phaser.Scene {
   private roadTiles = new Set<string>();
   private obstacleTiles = new Set<string>();
   private mapObstacles: MapObstacle[] = [];
+  private mapObstacleGraphics?: Phaser.GameObjects.Graphics;
   private waveSpawnIndex = 0;
   private run = createRunSession();
   private readonly towers: PlacedTower[] = [];
@@ -154,10 +175,13 @@ export class GameScene extends Phaser.Scene {
   private readonly boxDrones: BoxDrone[] = [];
   private readonly boxTurrets: BoxTurret[] = [];
   private readonly pendingImpacts: PendingImpact[] = [];
+  private readonly reversePriorityRestore = new Map<PlacedTower, Priority>();
+  private targetPriorityReverseUntil = 0;
   private readonly routeArrows: RouteArrow[] = [];
   private readonly megaHazards: MegaHazard[] = [];
   private readonly towerObjects = new Map<string, PlacedTower>();
   private wave = 0;
+  private markedEnemyWave = 0;
   private star = 1;
   private baseHealth = 100;
   private coins = 450;
@@ -192,6 +216,7 @@ export class GameScene extends Phaser.Scene {
   private stackableSinceForced = 0;
   private nonstackableSinceForced = 0;
   private randomSwapTimer = 30;
+  private lastQuantumGridWave = 0;
   private towerStunUntil = 0;
   private modifierChoiceOpen = false;
   private modifierOverlayObjects: Phaser.GameObjects.GameObject[] = [];
@@ -439,7 +464,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   private get currentTowerSpec(): TowerSpec { return TOWERS[this.rosterIndex]!; }
-  private get placementCost(): number { return this.mysteryPlacing ? 0 : this.currentTowerSpec.cost; }
+  private get placementCost(): number {
+    if (this.mysteryPlacing) return 0;
+    const spec = this.currentTowerSpec;
+    const copies = this.mutationStack('inflationaryMarket') ? this.towers.filter((tower) => tower.spec.id === spec.id).length : 0;
+    return Math.ceil(spec.cost * (1 + copies * 0.2) * (this.mutationStack('glassCannonEconomy') ? 1.35 : 1) / 10) * 10;
+  }
 
   private panBoardWithKeys(deltaSeconds: number): void {
     if (!this.boardLayer || !this.cursorKeys) return;
@@ -533,7 +563,9 @@ export class GameScene extends Phaser.Scene {
     const categoryForNode = nodeCount === 3
       ? ['Beginner', 'Advanced', 'Expert']
       : ['Beginner', 'Beginner', 'Advanced', 'Advanced', 'Expert'];
-    const mutationIds = ['sluggishMechanisms', 'rapidFire', 'crowdedWaves', 'extendedReach', 'dulledImpact', 'bountySurge'];
+    // Odyssey nodes draw from the full mutation catalog so later expeditions
+    // can roll the expansion conditions as well as the original six.
+    const mutationIds = CAMPAIGN_MUTATIONS.map((mutation) => mutation.id);
     const nodes: OdysseyNode[] = categoryForNode.map((category, index) => {
       const choices = available.filter((map) => map.category === category);
       const map = choices[Math.floor(Math.random() * choices.length)] ?? MAPS.find((entry) => entry.category === category) ?? MAPS[0]!;
@@ -676,6 +708,12 @@ export class GameScene extends Phaser.Scene {
     if (!tower) return;
     if (tower.noSell || this.mutationStack('overchargedSells') > 0) { this.gridFeedback = 'THIS TOWER CANNOT BE SOLD'; this.updateHUD(); return; }
     const refund = Math.ceil(tower.spentCoins * 0.5);
+    if (this.mutationStack('overchargeCascade')) {
+      const center = this.towerCenter(tower.tile, tower.spec);
+      const blast = this.addToBoard(this.add.circle(center.x, center.y, 2, 0x69e8ff, 0.4).setStrokeStyle(2, 0x9df4ff, 1).setDepth(8));
+      this.tweens.add({ targets: blast, radius: 4 * BOARD.cell, alpha: 0, duration: 360, onComplete: () => blast.destroy() });
+      for (const enemy of this.enemies) if (enemy.alive && Phaser.Math.Distance.Between(center.x, center.y, enemy.sprite.x, enemy.sprite.y) <= 4 * BOARD.cell) this.damageEnemy(enemy, undefined, Math.max(1, tower.spentCoins * 0.5));
+    }
     this.coins += refund;
     this.run.coins = this.coins;
     for (const dx of Array.from({ length: tower.spec.footprint }, (_, index) => index)) {
@@ -783,7 +821,8 @@ export class GameScene extends Phaser.Scene {
       const [x, y] = key.split(',').map(Number);
       graphics.fillRect(BOARD.x + x! * BOARD.cell, BOARD.y + y! * BOARD.cell, BOARD.cell, BOARD.cell);
     }
-    this.drawMapObstacles(graphics);
+    this.mapObstacleGraphics = this.addToBoard(this.add.graphics().setDepth(1));
+    this.drawMapObstacles(this.mapObstacleGraphics);
     this.createRouteArrows();
     const start = this.route[0]!;
     const end = this.route[this.route.length - 1]!;
@@ -894,6 +933,33 @@ export class GameScene extends Phaser.Scene {
         graphics.fillStyle(colors.accent, 0.8).fillRect(cx - 2, y + 2, 4, height - 4);
       }
     }
+  }
+
+  private shiftDynamicTerrain(): void {
+    if (!this.mutationStack('dynamicTerrain') || !this.mapObstacles.length || !this.mapObstacleGraphics) return;
+    const moved = this.mapObstacles.map((obstacle) => ({ ...obstacle }));
+    const occupied = new Set(this.roadTiles);
+    for (const tower of this.towers) for (let dx = 0; dx < tower.spec.footprint; dx += 1) for (let dy = 0; dy < tower.spec.footprint; dy += 1) occupied.add(routeKey({ x: tower.tile.x + dx, y: tower.tile.y + dy }));
+    for (const obstacle of moved) for (let x = obstacle.x; x < obstacle.x + obstacle.width; x += 1) for (let y = obstacle.y; y < obstacle.y + obstacle.height; y += 1) occupied.add(routeKey({ x, y }));
+    for (const obstacle of moved) {
+      for (let x = obstacle.x; x < obstacle.x + obstacle.width; x += 1) for (let y = obstacle.y; y < obstacle.y + obstacle.height; y += 1) occupied.delete(routeKey({ x, y }));
+      const spots: Tile[] = [];
+      for (let y = 1; y < BOARD_ROWS - obstacle.height; y += 1) for (let x = 1; x < BOARD_COLUMNS - obstacle.width; x += 1) {
+        let open = true;
+        for (let dx = 0; dx < obstacle.width && open; dx += 1) for (let dy = 0; dy < obstacle.height; dy += 1) if (occupied.has(routeKey({ x: x + dx, y: y + dy }))) { open = false; break; }
+        if (open) spots.push({ x, y });
+      }
+      if (!spots.length) continue;
+      const destination = spots[Math.floor(Math.random() * spots.length)]!;
+      obstacle.x = destination.x; obstacle.y = destination.y;
+      for (let dx = 0; dx < obstacle.width; dx += 1) for (let dy = 0; dy < obstacle.height; dy += 1) occupied.add(routeKey({ x: obstacle.x + dx, y: obstacle.y + dy }));
+    }
+    this.mapObstacles = moved;
+    this.obstacleTiles.clear();
+    for (const obstacle of moved) for (let x = obstacle.x; x < obstacle.x + obstacle.width; x += 1) for (let y = obstacle.y; y < obstacle.y + obstacle.height; y += 1) this.obstacleTiles.add(routeKey({ x, y }));
+    this.mapObstacleGraphics.clear();
+    this.drawMapObstacles(this.mapObstacleGraphics);
+    this.gridFeedback = 'DYNAMIC TERRAIN · OBSTACLES SHIFTED';
   }
 
   private drawMapSurface(graphics: Phaser.GameObjects.Graphics): void {
@@ -1093,6 +1159,13 @@ export class GameScene extends Phaser.Scene {
     const priority = this.add.rectangle(202, 520, 268, 38, 0x182733).setStrokeStyle(1, 0x607c82).setInteractive({ useHandCursor: true });
     this.priorityButtonLabel = this.add.text(202, 520, 'FIRST   ▾', { fontFamily: 'Arial', fontSize: '14px', color: COLORS.cream, fontStyle: 'bold', letterSpacing: 1 }).setOrigin(0.5);
     priority.on('pointerdown', () => {
+      if (this.selectedTower?.spec.id === 'deskFan') {
+        this.selectedTower.aimAngle = (this.selectedTower.aimAngle + Math.PI / 4) % (Math.PI * 2);
+        const compass = ['EAST', 'SOUTHEAST', 'SOUTH', 'SOUTHWEST', 'WEST', 'NORTHWEST', 'NORTH', 'NORTHEAST'];
+        this.gridFeedback = `DESK FAN AIM · ${compass[Math.round(this.selectedTower.aimAngle / (Math.PI / 4)) % 8]}`;
+        this.updateHUD();
+        return;
+      }
       const current = this.selectedTower?.priority ?? this.defaultPriority;
       const index = PRIORITIES.indexOf(current);
       const next = PRIORITIES[(index + 1) % PRIORITIES.length]!;
@@ -1290,7 +1363,7 @@ export class GameScene extends Phaser.Scene {
       arcadeClawMachine: 'Clear Star 2 · Stage 4', sentientMicrowaveOven: 'Clear Star 3 · Stage 3',
       hydraulicCarCrusher: 'Clear Star 3 · Stage 1', sentientTrafficLight: 'Reach Player Level 12',
     };
-    return { unlocked: false, requirement: campaign[spec.id] ?? 'Progression unlock' };
+    return { unlocked: false, requirement: campaign[spec.id] ?? towerUnlockRequirement(spec.id) };
   }
 
   private isMysteryOnlyRun(): boolean {
@@ -1369,10 +1442,19 @@ export class GameScene extends Phaser.Scene {
   }
 
   private stepRandomTowerSwap(dt: number): void {
-    if (!this.mutationStack('randomTowerSwap') || this.phase === 'defeat' || this.phase === 'victory') return;
-    this.randomSwapTimer -= dt;
-    if (this.randomSwapTimer > 0) return;
-    this.randomSwapTimer += 30;
+    const randomSwap = this.mutationStack('randomTowerSwap') > 0;
+    const quantumGrid = this.mutationStack('quantumGrid') > 0;
+    if ((!randomSwap && !quantumGrid) || this.phase === 'defeat' || this.phase === 'victory') return;
+    if (quantumGrid && this.wave >= 3 && this.wave % 3 === 0 && this.lastQuantumGridWave !== this.wave) {
+      this.lastQuantumGridWave = this.wave;
+      this.randomSwapTimer = 0;
+    }
+    if (!randomSwap && this.randomSwapTimer > 0) return;
+    if (randomSwap) {
+      this.randomSwapTimer -= dt;
+      if (this.randomSwapTimer > 0) return;
+      this.randomSwapTimer += 30;
+    } else this.randomSwapTimer = 30;
     const validAt = (tower: PlacedTower, tile: Tile, pair: PlacedTower[]) => {
       for (let dx = 0; dx < tower.spec.footprint; dx += 1) for (let dy = 0; dy < tower.spec.footprint; dy += 1) {
         const cell = { x: tile.x + dx, y: tile.y + dy };
@@ -1386,6 +1468,7 @@ export class GameScene extends Phaser.Scene {
     const pairs: Array<[PlacedTower, PlacedTower]> = [];
     for (let i = 0; i < this.towers.length; i += 1) for (let j = i + 1; j < this.towers.length; j += 1) {
       const a = this.towers[i]!; const b = this.towers[j]!;
+      if (quantumGrid && (a.noSell || b.noSell)) continue;
       if (validAt(a, b.tile, [a, b]) && validAt(b, a.tile, [a, b])) pairs.push([a, b]);
     }
     const pair = pairs[Math.floor(Math.random() * pairs.length)];
@@ -1404,6 +1487,8 @@ export class GameScene extends Phaser.Scene {
   private beginWave(number: number): void {
     this.megaHazards.splice(0).forEach((hazard) => hazard.graphic.destroy());
     this.wave = number;
+    if (number % 5 === 0) this.shiftDynamicTerrain();
+    if (this.mutationStack('bountyHuntersMark')) this.markedEnemyWave = 0;
     this.waveSpawnIndex = 0;
     this.run.wave = number;
     this.endlessAssignments.clear();
@@ -1412,7 +1497,9 @@ export class GameScene extends Phaser.Scene {
       this.waveGroups = generateEndlessWave(number, Math.random, endlessWaveEnemyBudget(number));
       this.allocateEndlessWaveBudget(number);
     } else {
-      this.waveGroups = number <= STAGE_ONE_WAVES.length ? STAGE_ONE_WAVES[number - 1]! : generateEndlessWave(number);
+      const scheduled = number <= STAGE_ONE_WAVES.length ? STAGE_ONE_WAVES[number - 1]! : generateEndlessWave(number);
+      this.waveGroups = !this.endlessMode && !this.mapPreview && !this.odysseyMode && this.draftMode === 'none' && this.star >= 2
+        ? this.starCampaignGroups(number, scheduled) : scheduled;
     }
     this.groupIndex = 0;
     this.groupRemaining = 0;
@@ -1432,6 +1519,26 @@ export class GameScene extends Phaser.Scene {
     const endlessModifierWave = this.endlessMode && this.endlessModifiersEnabled && number >= 5 && number % 5 === 0 && number % 20 !== 0;
     const stageFiveModifierWave = !this.endlessMode && !this.mapPreview && this.campaignStage === 5 && [5, 10, 15].includes(number);
     if (endlessModifierWave || stageFiveModifierWave) this.showModifierChoice();
+  }
+
+  private starCampaignGroups(wave: number, scheduled: WaveGroup[]): WaveGroup[] {
+    const replacements: Partial<Record<EnemyKey, EnemyKey>> = this.star >= 3 ? {
+      sock: 'plasticFlamingo', donut: 'dustyCushion', box: 'cardboardBox', scooter: 'rcDrone', ferret: 'sizzlingMarble',
+      bowling: 'anvilWeight', shoppingCart: 'castIronSkillet', recliner: 'stuffedTeddy', teeth: 'jackInBox', alarm: 'batteryPack',
+      pinata: 'magnetBot', nestingDoll: 'bubbleWrap', bubbleBath: 'mirrorShard', tape: 'oilCan', vending: 'toyTrain', dumpster: 'microwaveMini',
+    } : {
+      box: 'cardboardBox', scooter: 'windUpMouse', ferret: 'plasticFlamingo', shoppingCart: 'anvilWeight',
+      teeth: 'jackInBox', alarm: 'batteryPack', bubbleBath: 'bubbleWrap', tape: 'oilCan',
+    };
+    let replacementsUsed = 0;
+    return scheduled.map((group, index) => {
+      const candidate = replacements[group.enemy];
+      const eligible = candidate && ((wave + index * 2) % (this.star >= 3 ? 2 : 3) === 0)
+        && replacementsUsed < (this.star >= 3 ? 2 : 1);
+      if (!eligible) return { ...group };
+      replacementsUsed += 1;
+      return { ...group, enemy: candidate! };
+    });
   }
 
   private allocateEndlessWaveBudget(wave: number): void {
@@ -1541,8 +1648,8 @@ export class GameScene extends Phaser.Scene {
     const eliteStats = endlessEliteStats(baseSpec, elites);
     spec = { ...spec, hp: Math.max(1, Math.floor(spec.hp * eliteStats.hpMultiplier)),
       speed: spec.speed * eliteStats.speedMultiplier,
-      armor: eliteStats.armor,
-      hyperarmor: eliteStats.hyperarmor,
+      armor: eliteStats.armor + (this.mutationStack('ironRain') ? 5 : 0),
+      hyperarmor: eliteStats.hyperarmor + (this.mutationStack('ironRain') ? 25 : 0),
       color: elites.length ? endlessEliteSpec(elites[elites.length - 1]!).color : spec.color,
     };
     const titanMultiplier = this.mutationStack('titanBlood') > 0 ? 1.5 : 1;
@@ -1574,15 +1681,23 @@ export class GameScene extends Phaser.Scene {
       id: this.nextEnemyId++, spec, pathProgress, route, hp, maxHp: hp, waveNumber: this.wave, endlessThreat, elites: eliteEcho ? [] : [...elites], eliteGlows, megaShieldGlow, megaVortexGlow, megaPhase: 1, megaTransitionUntil: 0, megaShieldHp: 0, megaAbilityTimer: this.simTime + (spec.id === 'doomsdayClockworkGoliath' ? 6 : 5), eliteEcho, elitePhantomTimer: this.simTime + 4, eliteEchoSpawned: false, sprite, art, hpBar, label, alive: true,
       slowUntil: 0, slowAmount: 0, reverseMomentumUntil: 0, burnUntil: 0, burnDps: 0, burnTick: 0, stunUntil: 0,
       freezeUntil: 0, unfreezeSlowPending: false, wetUntil: 0,
-      ccImmuneUntil: 0, stunImmuneUntil: 0, pushImmuneUntil: 0, roombaPulledUntil: 0, speedBoostUntil: 0, suctionUntil: 0,
-      abilityTimer: this.simTime + (spec.ability === 'cosmicVacuum' ? 8 : spec.ability === 'lawnMower' ? 5 : Number.POSITIVE_INFINITY), abilitySlowUntil: 0, abilitySlowAmount: 0,
-      triggeredThresholds: new Set(), armorShred: 0, armorShredUntil: 0, hyperarmorShredUntil: 0, guanoSlipUntil: 0, guanoSlipCooldownUntil: 0, guanoSlipFloor: 0,
+      ccImmuneUntil: 0, stunImmuneUntil: 0, pushImmuneUntil: 0, roombaPulledUntil: 0, speedBoostUntil: 0, speedBoostAmount: 0, suctionUntil: 0,
+      abilityTimer: this.simTime + (spec.ability === 'cosmicVacuum' || spec.ability === 'vacuumMini' ? 8 : spec.ability === 'lawnMower' ? 5 : spec.ability === 'lawnMowerMini' ? 0.8 : spec.ability === 'jackInBox' ? 5 : spec.ability === 'grandfatherClockBoss' ? 12 : spec.ability === 'oilCan' ? 1 : Number.POSITIVE_INFINITY), abilitySlowUntil: 0, abilitySlowAmount: 0,
+      triggeredThresholds: new Set(), armorShred: 0, armorShredUntil: 0, armorFlatShred: 0, hyperarmorShredUntil: 0, guanoSlipUntil: 0, guanoSlipCooldownUntil: 0, guanoSlipFloor: 0,
       guanoPoisonUntil: 0, guanoPoisonTick: 0, guanoPoisonStacks: 0,
-      hyperarmorShred: 0, damageTakenMultiplier: 1, damageTakenUntil: 0, physicalDamageTakenMultiplier: 1, physicalDamageTakenUntil: 0, passiveStacks: new Map(),
+      hyperarmorShred: 0, damageTakenMultiplier: 1, damageTakenUntil: 0, physicalDamageTakenMultiplier: 1, physicalDamageTakenUntil: 0,
+      thermalDamageTakenMultiplier: 1, thermalDamageTakenUntil: 0, passiveStacks: new Map(),
       clawArmorShred: 0, clawArmorShredUntil: 0,
       trafficHyperarmorReduction: 0, trafficHyperarmorUntil: 0,
       trafficWrongWayReady: 0,
     };
+    if (spec.ability === 'bubbleWrap') enemy.passiveStacks.set('bubble-wrap-layers', 5);
+    if (this.mutationStack('bountyHuntersMark') && this.markedEnemyWave !== this.wave && !eliteEcho && enemyKey !== 'coinGeist') {
+      this.markedEnemyWave = this.wave;
+      enemy.passiveStacks.set('bounty-hunter-mark', 1);
+      enemy.maxHp *= 2; enemy.hp *= 2;
+      enemy.sprite.setStrokeStyle(3, 0xffd15e, 1);
+    }
     this.enemies.push(enemy);
     this.waveTotalHp += hp;
     this.waveEnemyCount += 1;
@@ -1661,10 +1776,12 @@ export class GameScene extends Phaser.Scene {
       const slow = slowActive ? enemy.slowAmount : 0;
       const bloodStages = endlessBloodPactStages(enemy.hp, enemy.maxHp);
       const bloodSpeed = 1 + bloodStages * 0.15 * this.eliteCount(enemy, 'brute');
-      const speedBoost = (this.simTime < enemy.speedBoostUntil ? 0.5 : 0) + (this.simTime < enemy.reverseMomentumUntil ? 0.1 : 0);
+      const speedBoost = (this.simTime < enemy.speedBoostUntil ? enemy.speedBoostAmount : 0) + (this.simTime < enemy.reverseMomentumUntil ? 0.1 : 0);
+      const marbleSpeed = enemy.spec.ability === 'sizzlingMarble' ? Math.max(0.45, 1 - (1 - enemy.hp / enemy.maxHp) * 0.55) : 1;
       const hazardSpeed = this.megaHazards.filter((hazard) => hazard.route === enemy.route && this.simTime < hazard.expiresAt && Math.abs(hazard.progress - enemy.pathProgress) <= 1.5)
         .reduce((multiplier, hazard) => multiplier * hazard.speedMultiplier, 1);
-      const movement = enemy.spec.speed * bloodSpeed * hazardSpeed * (1 - slow) * (1 + speedBoost) * dt;
+      const chronoSpeed = this.mutationStack('chronoInstability') && this.simTime % 15 < 5 ? 1.5 : 1;
+      const movement = enemy.spec.speed * bloodSpeed * hazardSpeed * chronoSpeed * marbleSpeed * (1 - slow) * (1 + speedBoost) * dt;
       if (this.simTime < enemy.guanoSlipUntil) {
         // Guano can make an enemy stumble backward briefly, but the stumble is
         // bounded so a puddle near the route entrance can never trap it there.
@@ -1692,11 +1809,70 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     const ability = enemy.spec.ability;
+    if (this.targetPriorityReverseUntil > 0 && this.simTime >= this.targetPriorityReverseUntil) {
+      for (const [tower, priority] of this.reversePriorityRestore) tower.priority = priority;
+      this.reversePriorityRestore.clear();
+      this.targetPriorityReverseUntil = 0;
+    }
+    if (ability === 'toyTrain' && !enemy.triggeredThresholds.has(100)) {
+      enemy.triggeredThresholds.add(100);
+      this.disableTowersAround(enemy.sprite.x, enemy.sprite.y, 4, 1.5);
+      for (let index = 1; index <= 3; index += 1) this.createEnemy('cardboardBox', Math.max(0, enemy.pathProgress - index * 0.5), enemy.route);
+      const whistle = this.addToBoard(this.add.circle(enemy.sprite.x, enemy.sprite.y, 4, 0xffe58c, 0.16).setStrokeStyle(2, 0xffe58c, 0.9).setDepth(7));
+      this.tweens.add({ targets: whistle, radius: 4 * BOARD.cell, alpha: 0, duration: 450, onComplete: () => whistle.destroy() });
+    }
+    if (ability === 'microwaveMini' && enemy.hp <= enemy.maxHp * 0.5 && !enemy.triggeredThresholds.has(50)) {
+      enemy.triggeredThresholds.add(50);
+      for (let index = 0; index < 3; index += 1) this.createEnemy('sizzlingMarble', enemy.pathProgress, enemy.route);
+      this.showMegaPulse(enemy, 0xff8b55, 3);
+    }
+    if (ability === 'arcadeCabinet') {
+      for (const threshold of [80, 60, 40, 20]) {
+        if (enemy.hp > enemy.maxHp * threshold / 100 || enemy.triggeredThresholds.has(threshold)) continue;
+        enemy.triggeredThresholds.add(threshold);
+        enemy.pathProgress = Math.min(enemy.route.length - 0.01, enemy.pathProgress + 1);
+        this.positionEnemy(enemy);
+        this.showMegaPulse(enemy, 0xc85cff, 2);
+      }
+      if (enemy.hp <= enemy.maxHp * 0.25 && !enemy.triggeredThresholds.has(25)) {
+        enemy.triggeredThresholds.add(25);
+        const glitch = this.add.rectangle(W / 2, H / 2, W, H, 0x8b4cff, 0.18).setDepth(30);
+        const stripes = this.add.graphics().setDepth(31);
+        stripes.lineStyle(1, 0xe4c9ff, 0.4);
+        for (let stripe = 0; stripe < 16; stripe += 1) stripes.lineBetween(0, stripe * H / 16, W, stripe * H / 16);
+        this.tweens.add({ targets: [glitch, stripes], alpha: 0, duration: 650, onComplete: () => { glitch.destroy(); stripes.destroy(); } });
+      }
+    }
     if (this.simTime < enemy.abilitySlowUntil) enemy.abilityTimer += dt * enemy.abilitySlowAmount;
+    if (ability === 'microwaveMini') {
+      for (const other of this.enemies) if (other.alive && other !== enemy && other.route === enemy.route
+        && Math.abs(other.pathProgress - enemy.pathProgress) <= 3) {
+        other.passiveStacks.set('microwave-chill-immunity-until', this.simTime + 0.25);
+      }
+    }
     if (!ability || this.simTime < enemy.abilityTimer) return;
     if (ability === 'lawnMower') {
       this.disableTowersAround(enemy.sprite.x, enemy.sprite.y, 4, 3);
       enemy.abilityTimer += 5;
+    } else if (ability === 'lawnMowerMini') {
+      // Its blades mow any track hazards directly under its body.
+      for (let index = this.trackResidues.length - 1; index >= 0; index -= 1) {
+        const residue = this.trackResidues[index]!;
+        if (residue.route !== enemy.route || Math.abs(residue.progress - enemy.pathProgress) > 1.2) continue;
+        residue.sprite.destroy(); this.trackResidues.splice(index, 1);
+      }
+      for (let index = this.trackSpikes.length - 1; index >= 0; index -= 1) {
+        const spike = this.trackSpikes[index]!;
+        if (spike.route !== enemy.route || Math.abs(spike.progress - enemy.pathProgress) > 1.2) continue;
+        spike.sprite.destroy(); this.trackSpikes.splice(index, 1);
+      }
+      for (let index = this.soapPuddles.length - 1; index >= 0; index -= 1) {
+        const puddle = this.soapPuddles[index]!;
+        if (Phaser.Math.Distance.Between(enemy.sprite.x, enemy.sprite.y, puddle.x, puddle.y) > 1.2 * BOARD.cell) continue;
+        puddle.sprite.destroy(); this.soapPuddles.splice(index, 1);
+      }
+      this.disableTowersAround(enemy.sprite.x, enemy.sprite.y, 2, 0.7);
+      enemy.abilityTimer += 0.8;
     } else if (ability === 'cosmicVacuum') {
       this.disableTowersAround(enemy.sprite.x, enemy.sprite.y, 6, 2.5);
       enemy.suctionUntil = this.simTime + 0.095;
@@ -1705,6 +1881,34 @@ export class GameScene extends Phaser.Scene {
         if (target && Phaser.Math.Distance.Between(target.sprite.x, target.sprite.y, enemy.sprite.x, enemy.sprite.y) <= 6 * BOARD.cell) impact.enemyId = enemy.id;
       }
       enemy.abilityTimer += 8;
+    } else if (ability === 'vacuumMini') {
+      enemy.suctionUntil = this.simTime + 0.15;
+      for (const impact of this.pendingImpacts) {
+        const target = this.enemies.find((candidate) => candidate.id === impact.enemyId && candidate.alive);
+        if (target && Phaser.Math.Distance.Between(target.sprite.x, target.sprite.y, enemy.sprite.x, enemy.sprite.y) <= 4 * BOARD.cell) impact.enemyId = enemy.id;
+      }
+      this.showMegaPulse(enemy, 0x9b83dc, 4);
+      enemy.abilityTimer += 8;
+    } else if (ability === 'jackInBox') {
+      enemy.pathProgress = Math.min(enemy.route.length - 0.01, enemy.pathProgress + 1.5);
+      this.positionEnemy(enemy);
+      this.showMegaPulse(enemy, 0xffd15e, 1.5);
+      enemy.abilityTimer += 5;
+    } else if (ability === 'oilCan') {
+      this.leaveOil(enemy.pathProgress, enemy.route);
+      enemy.abilityTimer += 2;
+    } else if (ability === 'grandfatherClockBoss') {
+      for (const tower of this.towers) {
+        this.reversePriorityRestore.set(tower, tower.priority);
+        tower.priority = tower.priority === 'First' ? 'Last' : tower.priority === 'Last' ? 'First'
+          : tower.priority === 'Weakest' ? 'Strongest' : 'Weakest';
+        if (Phaser.Math.Distance.Between(enemy.sprite.x, enemy.sprite.y, this.towerCenter(tower.tile, tower.spec).x, this.towerCenter(tower.tile, tower.spec).y) <= 4 * BOARD.cell) {
+          tower.passiveUpgradeTimers.set('aura-muted-until', this.simTime + 3);
+        }
+      }
+      this.targetPriorityReverseUntil = this.simTime + 4;
+      this.showMegaPulse(enemy, 0xe9be61, 6);
+      enemy.abilityTimer += 12;
     }
   }
 
@@ -1896,6 +2100,22 @@ export class GameScene extends Phaser.Scene {
   private triggerEnemyDefeatAbility(enemy: ActiveEnemy): void {
     const ability = enemy.spec.ability;
     if (ability === 'abyssalJunkHydra') this.addMegaHazard(enemy.route, enemy.pathProgress, Number.POSITIVE_INFINITY, 0.5, 0x8b62b1);
+    if (ability === 'dustyCushion') this.disableTowersAround(enemy.sprite.x, enemy.sprite.y, 1.5, 1);
+    if (ability === 'batteryPack') {
+      const tower = [...this.towers].sort((a, b) => Phaser.Math.Distance.Between(enemy.sprite.x, enemy.sprite.y, this.towerCenter(a.tile, a.spec).x, this.towerCenter(a.tile, a.spec).y)
+        - Phaser.Math.Distance.Between(enemy.sprite.x, enemy.sprite.y, this.towerCenter(b.tile, b.spec).x, this.towerCenter(b.tile, b.spec).y))[0];
+      if (tower) { tower.disabledUntil = Math.max(tower.disabledUntil, this.simTime + 3); tower.stunHitUntil = this.simTime + 1; this.showTowerStunWave(this.towerCenter(tower.tile, tower.spec).x, this.towerCenter(tower.tile, tower.spec).y, 1); }
+    }
+    if (ability === 'vacuumMini') for (let index = 0; index < 4; index += 1) this.createEnemy('dustyCushion', enemy.pathProgress, enemy.route);
+    if (this.eliteCount(enemy, 'frostTempered') > 0) {
+      this.showMegaPulse(enemy, 0x2483ff, 3);
+      for (const tower of this.towers) {
+        const center = this.towerCenter(tower.tile, tower.spec);
+        if (Phaser.Math.Distance.Between(enemy.sprite.x, enemy.sprite.y, center.x, center.y) > 3 * BOARD.cell) continue;
+        tower.siphonSlowAmount = Math.max(tower.siphonSlowAmount, 0.3);
+        tower.siphonSlowUntil = Math.max(tower.siphonSlowUntil, this.simTime + 3);
+      }
+    }
     if (ability === 'piñata') this.disableTowersAround(enemy.sprite.x, enemy.sprite.y, 3, 3);
     if (ability === 'nestingDoll') {
       for (let i = 0; i < 5; i += 1) this.createEnemy('sock', enemy.pathProgress, enemy.route);
@@ -1974,6 +2194,20 @@ export class GameScene extends Phaser.Scene {
     this.soapPuddles.push({ x: at.x, y: at.y, expiresAt: this.simTime + 3, sprite, slows, source });
   }
 
+  private leaveOil(progress: number, route: Tile[]): void {
+    const at = this.positionOnRoute(progress, route);
+    const sprite = this.addToBoard(this.add.rectangle(at.x, at.y, BOARD.cell * 1.7, BOARD.cell * 1.2, 0x3d3624, 0.82)
+      .setStrokeStyle(1, 0xd0a848, 0.9).setDepth(3));
+    this.soapPuddles.push({ x: at.x, y: at.y, expiresAt: this.simTime + 8, sprite, slows: false, speedBonus: 0.2 });
+  }
+
+  private leaveRadioactivePuddle(enemy: ActiveEnemy): void {
+    const sprite = this.addToBoard(this.add.rectangle(enemy.sprite.x, enemy.sprite.y, BOARD.cell * 1.5, BOARD.cell * 1.5, 0x91f94e, 0.3)
+      .setStrokeStyle(1.5, 0xc9ff7b, 0.9).setDepth(3));
+    this.tweens.add({ targets: sprite, scale: 1.25, alpha: 0.22, duration: 450, yoyo: true, repeat: -1 });
+    this.soapPuddles.push({ x: enemy.sprite.x, y: enemy.sprite.y, expiresAt: this.simTime + 5, sprite, slows: false, radioactive: true });
+  }
+
   private stepSoapPuddles(): void {
     for (let index = this.soapPuddles.length - 1; index >= 0; index -= 1) {
       const puddle = this.soapPuddles[index]!;
@@ -1984,8 +2218,19 @@ export class GameScene extends Phaser.Scene {
       }
       for (const enemy of this.enemies) {
         if (enemy.alive && Phaser.Math.Distance.Between(enemy.sprite.x, enemy.sprite.y, puddle.x, puddle.y) <= 2.5 * BOARD.cell) {
-          if (puddle.slows) this.applySlow(enemy, 0.3, 0.8, puddle.source);
-          else enemy.speedBoostUntil = Math.max(enemy.speedBoostUntil, this.simTime + 2);
+          if (puddle.radioactive) {
+            if (!enemy.spec.boss && this.simTime >= (enemy.passiveStacks.get('fallout-tick') ?? 0)) {
+              enemy.passiveStacks.set('fallout-tick', this.simTime + 0.5);
+              this.damageEnemy(enemy, undefined, 8);
+              enemy.speedBoostAmount = Math.max(enemy.speedBoostAmount, 0.15);
+              enemy.speedBoostUntil = Math.max(enemy.speedBoostUntil, this.simTime + 0.6);
+            }
+          } else if (puddle.slows) this.applySlow(enemy, 0.3, 0.8, puddle.source);
+          else {
+            enemy.speedBoostAmount = enemy.speedBoostUntil > this.simTime
+              ? Math.max(enemy.speedBoostAmount, puddle.speedBonus ?? 0.5) : (puddle.speedBonus ?? 0.5);
+            enemy.speedBoostUntil = Math.max(enemy.speedBoostUntil, this.simTime + 2);
+          }
         }
       }
     }
@@ -2074,14 +2319,14 @@ export class GameScene extends Phaser.Scene {
 
   private leaveTrackResidue(tower: PlacedTower, progress: number, route: Tile[]): void {
     if (tower.spec.id === 'lawnDartGnome' || this.trackResidues.filter((residue) => residue.tower === tower).length >= 24) return;
-    const upgrades = tower.acquiredUpgrades.filter((upgrade) => /track|ground|trap|puddle|patch|trail|leave|drop|stick|crack|pool|goo|gum|foam|ember|clean path/i.test(upgrade.description));
-    if (!upgrades.length) return;
-    const description = upgrades.map((upgrade) => upgrade.description.toLowerCase()).join(' · ');
+    const upgrades = tower.acquiredUpgrades.filter((upgrade) => /track|ground|trap|puddle|patch|trail|leave|drop|stick|crack|pool|goo|gum|foam|glue|acid|charged|ember|clean path/i.test(upgrade.description));
+    if (!upgrades.length && tower.spec.id !== 'glueCannon') return;
+    const description = upgrades.map((upgrade) => upgrade.description.toLowerCase()).join(' · ') || 'sticky glue pool; slow 50% for 3 seconds';
     const slow = /slow|freeze|gum|foam|ice cream|stumble|slip/.test(description);
     const burn = /burn|fire|ember|flame/.test(description);
     const armorShred = /armor/.test(description) && !/hyperarmor/.test(description);
     const hyperarmorShred = /hyperarmor|clean path/.test(description);
-    const trap = /gum|stuck|capture|trap|stop one enemy/.test(description);
+    const trap = /gum|stuck|capture|trap|stop one enemy/.test(description) || tower.spec.id === 'glueCannon' && tower.ranks[1]! >= 7;
     const tint = burn ? 0xff8b43 : slow ? 0x71dcf4 : trap ? 0xd7a6f2 : 0xa7e65a;
     const specifiedDuration = Number(description.match(/(?:for|lasts? for)\s+(\d+(?:\.\d+)?)\s*(?:s|seconds?)/)?.[1] ?? 0);
     const duration = /rest of the game|rest of its lifespan/.test(description) ? 600 : specifiedDuration || 6;
@@ -2094,19 +2339,44 @@ export class GameScene extends Phaser.Scene {
       const markProgress = Phaser.Math.Clamp(mark, 0, route.length - 1);
       const at = this.positionOnRoute(markProgress, route);
       const graphic = this.addToBoard(this.add.graphics().setPosition(at.x, at.y).setDepth(3));
-      graphic.fillStyle(tint, 0.52).fillCircle(0, 0, 4.4);
-      graphic.lineStyle(1.2, tint, 0.98).strokeCircle(0, 0, 4.4);
-      graphic.fillStyle(0xfff6d5, 0.85).fillCircle(-1.2, -1.2, 1.1);
+      if (tower.spec.id === 'glueCannon') {
+        const size = BOARD.cell * (tower.ranks[2]! >= 2 ? 3 : tower.ranks[2]! >= 1 ? 2.5 : 2);
+        graphic.fillStyle(tint, 0.42).fillRoundedRect(-size / 2, -size / 2, size, size, 3);
+        graphic.lineStyle(1.4, tint, 0.95).strokeRoundedRect(-size / 2, -size / 2, size, size, 3);
+        graphic.fillStyle(0xe4ffb7, 0.75).fillCircle(-size * 0.2, -size * 0.16, 1.5);
+      } else {
+        graphic.fillStyle(tint, 0.52).fillCircle(0, 0, 4.4);
+        graphic.lineStyle(1.2, tint, 0.98).strokeCircle(0, 0, 4.4);
+        graphic.fillStyle(0xfff6d5, 0.85).fillCircle(-1.2, -1.2, 1.1);
+      }
       this.trackResidues.push({ progress: markProgress, route, expiresAt: this.simTime + duration, tickIn: 0.25, sprite: graphic, tower,
-        slow: slow ? (/60%/.test(description) ? 0.6 : /50%/.test(description) ? 0.5 : 0.3) : 0,
+        slow: tower.spec.id === 'glueCannon' ? (tower.ranks[1]! >= 3 ? 0.6 : 0.5) : slow ? (/60%/.test(description) ? 0.6 : /50%/.test(description) ? 0.5 : 0.3) : 0,
         burn, armorShred, hyperarmorShred,
         damageTaken: /take\s+\d+%?\s+more damage/.test(description),
-        damagePerSecond: tower.spec.id === 'laserOfficePrinter' && tower.ranks[1]! >= 3 ? 15 : 0,
+        damagePerSecond: tower.spec.id === 'laserOfficePrinter' && tower.ranks[1]! >= 3 ? 15
+          : tower.spec.id === 'teslaCoilLamp' && tower.ranks[2]! >= 1 ? 18
+            : tower.spec.id === 'glueCannon' && tower.ranks[0]! >= 1 ? 40 : 0,
         explode: /explode when expiring/.test(description), trap, hitEnemyIds: new Set<number>() });
     }
   }
 
   private stepTrackResidues(dt: number): void {
+    // Glue hardening counts actual time inside a visible pool. Keep a separate
+    // timer per cannon so overlapping globs from one cannon do not multiply it.
+    for (const tower of this.towers.filter((entry) => entry.spec.id === 'glueCannon' && entry.ranks[1]! >= 1)) {
+      const key = `glue-exposure:${tower.tile.x},${tower.tile.y}`;
+      for (const enemy of this.enemies) {
+        if (!enemy.alive) continue;
+        const inGlue = this.trackResidues.some((residue) => residue.tower === tower && residue.route === enemy.route
+          && Math.abs(enemy.pathProgress - residue.progress) <= (tower.ranks[2]! >= 2 ? 1.45 : tower.ranks[2]! >= 1 ? 0.95 : 0.62));
+        const exposure = inGlue ? (enemy.passiveStacks.get(key) ?? 0) + dt : 0;
+        const threshold = tower.ranks[1]! >= 6 ? 2 : 3;
+        if (inGlue && exposure >= threshold) {
+          this.applyStun(enemy, tower.ranks[1]! >= 2 ? 3 : 2, tower.ranks[1]! >= 5, tower);
+          enemy.passiveStacks.set(key, 0);
+        } else enemy.passiveStacks.set(key, exposure);
+      }
+    }
     for (let index = this.trackResidues.length - 1; index >= 0; index -= 1) {
       const residue = this.trackResidues[index]!;
       if (this.simTime >= residue.expiresAt) {
@@ -2124,11 +2394,14 @@ export class GameScene extends Phaser.Scene {
       if (residue.tickIn > 0) continue;
       residue.tickIn = 0.5;
       for (const enemy of this.enemies) {
-        if (!enemy.alive || enemy.route !== residue.route || Math.abs(enemy.pathProgress - residue.progress) > 0.62) continue;
+        const poolReach = residue.tower.spec.id === 'glueCannon'
+          ? residue.tower.ranks[2]! >= 2 ? 1.45 : residue.tower.ranks[2]! >= 1 ? 0.95 : 0.62 : 0.62;
+        if (!enemy.alive || enemy.route !== residue.route || Math.abs(enemy.pathProgress - residue.progress) > poolReach
+          || enemy.spec.ability === 'rcDrone' && residue.tower.spec.id === 'glueCannon') continue;
         if (residue.trap && (residue.hitEnemyIds.has(enemy.id) || enemy.spec.boss)) continue;
         if (residue.trap) {
           residue.hitEnemyIds.add(enemy.id);
-          this.applyStun(enemy, 0.75);
+          this.applyStun(enemy, residue.tower.spec.id === 'glueCannon' ? 2 : 0.75, residue.tower.spec.id === 'glueCannon' && residue.tower.ranks[1]! >= 5, residue.tower);
         }
         if (residue.slow) this.applySlow(enemy, residue.slow, 0.8, residue.tower);
         if (residue.armorShred) {
@@ -2714,8 +2987,16 @@ export class GameScene extends Phaser.Scene {
   private stepTowers(dt: number): void {
     const globalSpeedBase = this.globalAttackSpeedMultiplier();
     for (const tower of this.towers) {
+      if (tower.passiveUpgradeTimers.has('breakdown') && this.coins >= 300) {
+        this.coins -= 300; this.run.coins = this.coins;
+        tower.passiveUpgradeTimers.delete('breakdown');
+        tower.disabledUntil = 0;
+        tower.label.setText(tower.spec.name).setColor('#fff5d7');
+        this.gridFeedback = `${tower.spec.name.toUpperCase()} REPAIRED · −$300`;
+      }
       tower.attackSpeedMultiplier = tower.baseAttackSpeedMultiplier;
       tower.pigeonRangeAuraMultiplier = 1;
+      tower.damageAuraMultiplier = 1;
       const disabled = tower.disabledUntil > this.simTime || this.towerStunUntil > this.simTime;
       const siphoned = tower.siphonSlowUntil > this.simTime;
       tower.sprite.setAlpha(disabled ? 0.38 : siphoned ? 0.75 : 1);
@@ -2725,6 +3006,7 @@ export class GameScene extends Phaser.Scene {
       tower.label.setAlpha(disabled ? 0.45 : siphoned ? 0.75 : 1);
       this.stepPassiveUpgradeEffects(tower, dt);
       if (tower.spec.attackType === 'trafficLight') this.stepTrafficLight(tower, dt);
+      if (tower.spec.id === 'espressoMachine') this.stepEspressoMachine(tower, dt);
     }
     for (const tower of this.towers) this.applyTowerAuras(tower);
     for (const tower of this.towers) if (tower.siphonSlowUntil > this.simTime) {
@@ -2734,8 +3016,18 @@ export class GameScene extends Phaser.Scene {
     for (const tower of this.towers) {
       const globalSpeed = globalSpeedBase;
       if (tower.disabledUntil > this.simTime || this.towerStunUntil > this.simTime) continue;
-      if (tower.spec.attackType === 'trafficLight') continue;
+      if (this.mutationStack('doubleEdgedRange') > 0 && !['supportLaser', 'trafficLight', 'espresso', 'prism', 'fortress'].includes(tower.spec.attackType)) tower.attackSpeedMultiplier *= 0.8;
+      if (this.mutationStack('highEnergyNetwork')) {
+        const neighbors = this.towers.filter((other) => other !== tower && other.spec.id === tower.spec.id
+          && Math.max(Math.abs(other.tile.x - tower.tile.x), Math.abs(other.tile.y - tower.tile.y)) <= tower.spec.footprint);
+        tower.attackSpeedMultiplier *= 1 + Math.min(0.4, neighbors.length * 0.1);
+      }
+      if (tower.spec.attackType === 'trafficLight' || tower.spec.attackType === 'espresso' || tower.spec.attackType === 'prism') continue;
       if (tower.spec.attackType === 'fortress') continue;
+      if (tower.spec.id === 'quantumPendulum' && tower.ranks[0]! > 0) {
+        const cooldownSeconds = tower.ranks[0]! >= 7 ? 4 : tower.ranks[0]! >= 2 ? 7 : 10;
+        tower.attackSpeedMultiplier *= 12 / cooldownSeconds;
+      }
       if (tower.spec.id === 'angryPigeon' && tower.ranks[2]! >= 3) this.stepPigeonGuano(tower, dt);
       if (tower.spec.id === 'laserOfficePrinter') {
         if (tower.ranks[2]! >= 3) tower.attackSpeedMultiplier = Math.max(tower.attackSpeedMultiplier, 2);
@@ -2768,6 +3060,7 @@ export class GameScene extends Phaser.Scene {
         if (tower.cooldown > 0) continue;
         const dps = Math.min(200, 10 + (tower.beamLockTime * tower.trackingMultiplier / 5) * 190);
         this.damageEnemy(target, tower, (dps / tower.spec.attackRate) * tower.damageMultiplier, true);
+        this.stepPrismRefraction(tower, target, (dps / tower.spec.attackRate) * tower.damageMultiplier);
         tower.cooldown = 1 / (tower.spec.attackRate * tower.attackSpeedMultiplier * globalSpeed);
         this.drawShot(tower, target);
         continue;
@@ -2932,7 +3225,8 @@ export class GameScene extends Phaser.Scene {
   private attackTarget(tower: PlacedTower, target: ActiveEnemy, candidates: ActiveEnemy[]): void {
     // Count attacks once, even when one shot hits several enemies.
     tower.shotCounter += 1;
-    const damage = tower.spec.damage * tower.damageMultiplier;
+    const damage = tower.spec.id === 'staplerTurret' && tower.ranks[0]! >= 2
+      ? 85 * tower.damageMultiplier : tower.spec.damage * tower.damageMultiplier;
     const attackProgress = target.pathProgress;
     if (tower.spec.id === 'laserOfficePrinter') {
       const origin = this.towerCenter(tower.tile, tower.spec);
@@ -2999,6 +3293,139 @@ export class GameScene extends Phaser.Scene {
       if (tower.ranks[2]! >= 2) this.applySlow(target, tower.ranks[2]! >= 3 ? 0.4 : 0.15, tower.ranks[2]! >= 3 ? 2 : 1.5, tower);
       if (tower.ranks[2]! >= 5 && tower.shotCounter % 5 === 0) this.applyFreeze(target, 1, tower);
       this.drawShot(tower, target);
+      return;
+    }
+    if (tower.spec.id === 'staplerTurret') {
+      const origin = this.towerCenter(tower.tile, tower.spec);
+      const direction = Math.atan2(target.sprite.y - origin.y, target.sprite.x - origin.x);
+      const pathOne = tower.ranks[0]!;
+      const pathTwo = tower.ranks[1]!;
+      const burstReady = pathTwo >= 7 && this.simTime >= (tower.passiveUpgradeTimers.get('stapler-burst-ready') ?? 0);
+      const burstCount = burstReady ? 8 : pathTwo >= 6 ? 5 : pathTwo >= 3 ? 6 : pathTwo >= 2 ? 3 : 1;
+      if (burstReady) tower.passiveUpgradeTimers.set('stapler-burst-ready', this.simTime + 6);
+      const pierceCount = pathOne >= 7 ? 6 : pathOne >= 5 ? 4 : pathOne >= 2 ? 2 : 1;
+      const lineTargets = candidates.map((enemy) => {
+        const dx = enemy.sprite.x - origin.x; const dy = enemy.sprite.y - origin.y;
+        return { enemy, along: dx * Math.cos(direction) + dy * Math.sin(direction), across: Math.abs(dx * Math.sin(direction) - dy * Math.cos(direction)) };
+      }).filter(({ along, across }) => along >= 0 && along <= this.effectiveTowerRange(tower) * BOARD.cell && across <= BOARD.cell * 0.55)
+        .sort((a, b) => a.along - b.along).slice(0, pierceCount);
+      const amount = pathOne >= 2 ? 85 : damage;
+      for (let shot = 0; shot < burstCount; shot += 1) {
+        for (const { enemy } of lineTargets) {
+          this.damageEnemy(enemy, tower, amount, enemy === target, false);
+          this.drawShot(tower, enemy);
+        }
+      }
+      return;
+    }
+    if (tower.spec.id === 'bubbleBlower') {
+      const origin = this.towerCenter(tower.tile, tower.spec);
+      const bubble = this.addToBoard(this.add.circle(origin.x, origin.y, 3, 0x8cecf4, 0.72).setStrokeStyle(1, 0xf4ffff, 1).setDepth(7));
+      this.tweens.add({ targets: bubble, x: target.sprite.x, y: target.sprite.y, radius: 5, duration: 220, onComplete: () => bubble.destroy() });
+      const radius = tower.ranks[0]! >= 5 ? 2 : tower.ranks[0]! >= 1 ? 1 : 0.65;
+      const affected = candidates.filter((enemy) => enemy.route === target.route && Math.abs(enemy.pathProgress - attackProgress) <= radius);
+      for (const enemy of affected) {
+        this.damageEnemy(enemy, tower, damage * (tower.ranks[0]! >= 3 ? 2 : 1), enemy === target);
+        if (!enemy.spec.miniboss && !enemy.spec.boss) {
+          const stackKey = `bubble-layers:${tower.tile.x},${tower.tile.y}`;
+          const layers = tower.ranks[2]! >= 3 ? Math.min(3, (enemy.passiveStacks.get(stackKey) ?? 0) + 1) : 1;
+          enemy.passiveStacks.set(stackKey, layers);
+          this.applyStun(enemy, tower.ranks[0]! >= 7 ? 0.8 : 0.4 + layers * 0.15, false, tower);
+        }
+        if (tower.ranks[1]! >= 1) this.spawnSoapPuddle(enemy.pathProgress, enemy.route, true, tower);
+      }
+      return;
+    }
+    if (tower.spec.id === 'saltShaker' || tower.spec.id === 'deskFan') {
+      const origin = this.towerCenter(tower.tile, tower.spec);
+      const targetAngle = Math.atan2(target.sprite.y - origin.y, target.sprite.x - origin.x);
+      const oscillatingFan = tower.spec.id === 'deskFan' && tower.ranks[1]! >= 1;
+      const angle = tower.spec.id === 'deskFan'
+        ? tower.aimAngle + (oscillatingFan ? Math.sin(this.simTime * 2.4) * Math.PI / 4 : 0)
+        : targetAngle;
+      const halfAngle = tower.spec.id === 'saltShaker' && tower.ranks[1]! >= 2
+        ? Math.PI : tower.spec.id === 'deskFan' && tower.ranks[1]! >= 1 ? Math.PI / 4 : Math.PI / 7;
+      const radius = this.effectiveTowerRange(tower) * BOARD.cell;
+      const fan = this.addToBoard(this.add.graphics().setDepth(6));
+      fan.fillStyle(tower.spec.color, 0.25).lineStyle(1.5, tower.spec.color, 0.85).beginPath().moveTo(origin.x, origin.y);
+      for (let index = 0; index <= 12; index += 1) {
+        const ray = angle - halfAngle + (2 * halfAngle * index / 12);
+        fan.lineTo(origin.x + Math.cos(ray) * radius, origin.y + Math.sin(ray) * radius);
+      }
+      fan.closePath().fillPath().strokePath();
+      this.tweens.add({ targets: fan, alpha: 0, duration: 260, onComplete: () => fan.destroy() });
+      const affected = candidates.filter((enemy) => {
+        const dx = enemy.sprite.x - origin.x; const dy = enemy.sprite.y - origin.y;
+        const distance = Math.hypot(dx, dy);
+        const delta = Math.atan2(Math.sin(Math.atan2(dy, dx) - angle), Math.cos(Math.atan2(dy, dx) - angle));
+        return distance <= radius && Math.abs(delta) <= halfAngle;
+      });
+      for (const enemy of affected) {
+        if (tower.spec.id === 'deskFan') {
+          const damagePerCycle = tower.ranks[0]! >= 3 ? 25 : tower.ranks[0]! >= 2 ? 12 : 0;
+          if (damagePerCycle > 0) this.damageEnemy(enemy, tower, damagePerCycle * tower.damageMultiplier);
+          this.applyPushback(enemy, tower.ranks[0]! >= 1 ? 1.2 : 0.5);
+        } else {
+          this.damageEnemy(enemy, tower, damage, enemy === target);
+          enemy.burnSource = tower;
+          enemy.burnDps = Math.max(enemy.burnDps, 2 * tower.damageMultiplier);
+          enemy.burnUntil = Math.max(enemy.burnUntil, this.simTime + 2);
+          if (tower.ranks[0]! > 0) enemy.armorFlatShred = Math.min(5, enemy.armorFlatShred + 1);
+          if (tower.ranks[2]! >= 1) {
+            enemy.thermalDamageTakenMultiplier = Math.max(enemy.thermalDamageTakenMultiplier, tower.ranks[2]! >= 3 ? 1.25 : 1.15);
+            enemy.thermalDamageTakenUntil = Math.max(enemy.thermalDamageTakenUntil, this.simTime + 3);
+          }
+          if (tower.ranks[1]! >= 2) this.applySlow(enemy, 0.25, 3, tower);
+        }
+      }
+      return;
+    }
+    if (tower.spec.id === 'lawnAerator') {
+      const radius = 1.15;
+      const targets = candidates.filter((enemy) => enemy.route === target.route && Math.abs(enemy.pathProgress - attackProgress) <= radius)
+        .slice(0, tower.ranks[0]! >= 6 ? 5 : tower.ranks[0]! >= 3 ? 3 : 1);
+      const hit = this.addToBoard(this.add.graphics().setDepth(6));
+      hit.lineStyle(3, 0xc5d7c8, 0.9).lineBetween(target.sprite.x - BOARD.cell * 0.55, target.sprite.y, target.sprite.x + BOARD.cell * 0.55, target.sprite.y);
+      this.tweens.add({ targets: hit, alpha: 0, duration: 180, onComplete: () => hit.destroy() });
+      for (const enemy of targets) {
+        this.damageEnemy(enemy, tower, damage, enemy === target);
+        if (tower.ranks[2]! >= 1) {
+          enemy.burnSource = tower; enemy.burnDps = Math.max(enemy.burnDps, 2); enemy.burnUntil = Math.max(enemy.burnUntil, this.simTime + 4);
+        }
+      }
+      return;
+    }
+    if (tower.spec.id === 'glueCannon') {
+      const radius = tower.ranks[2]! >= 1 ? 1.5 : 1;
+      const impact = this.addToBoard(this.add.circle(target.sprite.x, target.sprite.y, radius * BOARD.cell, 0x8fe26f, 0.28).setStrokeStyle(1.5, 0xc5ff83, 0.85).setDepth(6));
+      this.tweens.add({ targets: impact, alpha: 0.15, duration: 260, onComplete: () => impact.destroy() });
+      const affected = candidates.filter((enemy) => enemy.route === target.route && Math.abs(enemy.pathProgress - attackProgress) <= radius);
+      for (const enemy of affected) {
+        this.damageEnemy(enemy, tower, damage, enemy === target);
+        this.applySlow(enemy, Math.min(0.8, 0.5 + tower.slowBonus), 3 * tower.slowDurationMultiplier, tower);
+      }
+      return;
+    }
+    if (tower.spec.id === 'quantumPendulum') {
+      const affected = candidates.filter((enemy) => enemy !== target && enemy.route === target.route
+        && Math.abs(enemy.pathProgress - attackProgress) <= (tower.ranks[0]! >= 2 ? 1 : 0.15))
+        .sort((a, b) => b.pathProgress - a.pathProgress)
+        .slice(0, tower.ranks[0]! >= 2 ? (tower.ranks[0]! >= 6 ? 5 : 3) : 1);
+      if (!affected.includes(target)) affected.unshift(target);
+      const limit = tower.ranks[0]! >= 6 ? 5 : tower.ranks[0]! >= 2 ? 3 : 1;
+      for (const enemy of affected.slice(0, limit)) {
+        this.damageEnemy(enemy, tower, damage, true);
+        if (!enemy.spec.boss) {
+          enemy.pathProgress = Math.max(0, enemy.pathProgress - (tower.ranks[0]! >= 5 ? 6 : 4));
+          if (tower.ranks[1]! >= 1) { enemy.damageTakenMultiplier = Math.max(enemy.damageTakenMultiplier, tower.ranks[1]! >= 2 ? 2 : 1.25); enemy.damageTakenUntil = Math.max(enemy.damageTakenUntil, this.simTime + (tower.ranks[1]! >= 3 ? 6 : 4)); }
+          this.positionEnemy(enemy);
+        }
+      }
+      if (tower.ranks[2]! >= 1) this.spawnTimer += tower.ranks[2]! >= 7 ? 8 : tower.ranks[2]! >= 5 ? 5 : tower.ranks[2]! >= 2 ? 3 : 1;
+      const center = this.towerCenter(tower.tile, tower.spec);
+      const pendulum = this.addToBoard(this.add.graphics().setDepth(6));
+      pendulum.lineStyle(3, 0x9b83dc, 0.9).lineBetween(center.x, center.y, target.sprite.x, target.sprite.y);
+      this.tweens.add({ targets: pendulum, alpha: 0, duration: 320, onComplete: () => pendulum.destroy() });
       return;
     }
     if (tower.spec.attackType === 'claw') {
@@ -3070,9 +3497,16 @@ export class GameScene extends Phaser.Scene {
     }
     if (tower.spec.attackType === 'chain' || tower.spec.attackType === 'pierce') {
       const sorted = [...candidates].sort((a, b) => Math.abs(a.pathProgress - target.pathProgress) - Math.abs(b.pathProgress - target.pathProgress));
-      const targets = sorted.slice(0, this.upgradeTargetCap(tower, 3));
+      const targetCap = tower.spec.id === 'teslaCoilLamp'
+        ? tower.ranks[0]! >= 7 ? 12 : tower.ranks[0]! >= 2 ? 8 : 4
+        : this.upgradeTargetCap(tower, 3);
+      const targets = sorted.slice(0, targetCap);
       targets.forEach((enemy, index) => {
-        this.damageEnemy(enemy, tower, damage * (tower.spec.attackType === 'chain' ? 0.8 ** index : 1));
+        const fullTeslaDamage = tower.spec.id === 'teslaCoilLamp' && tower.ranks[0]! >= 2;
+        this.damageEnemy(enemy, tower, damage * (tower.spec.attackType === 'chain' && !fullTeslaDamage ? 0.8 ** index : 1));
+        if (tower.spec.id === 'teslaCoilLamp' && tower.ranks[1]! >= 2) this.applyStun(enemy, 0.8, false, tower);
+        else if (tower.spec.id === 'teslaCoilLamp' && tower.ranks[1]! >= 1 && Math.random() < 0.1) this.applyStun(enemy, 0.5, false, tower);
+        if (tower.spec.id === 'teslaCoilLamp' && tower.ranks[2]! >= 1) this.leaveTrackResidue(tower, enemy.pathProgress, enemy.route);
         this.drawShot(tower, enemy);
       });
       return;
@@ -3114,6 +3548,78 @@ export class GameScene extends Phaser.Scene {
       if (tower.coinBonusOnStick > 0) { this.coins += tower.coinBonusOnStick; this.run.coins = this.coins; }
     }
     if (tower.stunChance > 0 && Math.random() < tower.stunChance) this.applyStun(target, 0.5);
+  }
+
+  private stepEspressoMachine(tower: PlacedTower, dt: number): void {
+    if (tower.ranks[1]! >= 1) {
+      let vent = (tower.passiveUpgradeTimers.get('espresso-vent') ?? 6) - dt;
+      if (vent <= 0) {
+        const center = this.towerCenter(tower.tile, tower.spec);
+        const radius = (2 + (tower.ranks[1]! >= 4 ? 1 : 0)) * BOARD.cell * this.globalRangeMultiplier();
+        const steam = this.addToBoard(this.add.circle(center.x, center.y, radius, 0xffb17c, 0.18).setStrokeStyle(1.5, 0xffd1a1, 0.85).setDepth(6));
+        this.tweens.add({ targets: steam, alpha: 0, duration: 650, onComplete: () => steam.destroy() });
+        for (const enemy of this.enemies) {
+          if (!enemy.alive || Phaser.Math.Distance.Between(center.x, center.y, enemy.sprite.x, enemy.sprite.y) > radius) continue;
+          this.damageEnemy(enemy, tower, 25 * tower.damageMultiplier);
+          if (tower.ranks[1]! >= 6) { enemy.burnSource = tower; enemy.burnDps = Math.max(enemy.burnDps, 5); enemy.burnUntil = Math.max(enemy.burnUntil, this.simTime + 3); }
+        }
+        vent = tower.ranks[1]! >= 3 ? 3 : 6;
+      }
+      tower.passiveUpgradeTimers.set('espresso-vent', vent);
+    }
+    if (tower.ranks[0]! >= 7) {
+      const readyAt = tower.passiveUpgradeTimers.get('espresso-shot-ready') ?? this.simTime;
+      if (this.simTime >= readyAt) {
+        tower.passiveUpgradeTimers.set('espresso-shot-until', this.simTime + 8);
+        tower.passiveUpgradeTimers.set('espresso-shot-ready', this.simTime + 20);
+      }
+    }
+    if (tower.ranks[2]! >= 7) {
+      const readyAt = tower.passiveUpgradeTimers.get('espresso-syrup-ready') ?? this.simTime;
+      if (this.simTime >= readyAt) {
+        tower.passiveUpgradeTimers.set('espresso-syrup-until', this.simTime + 10);
+        tower.passiveUpgradeTimers.set('espresso-syrup-ready', this.simTime + 30);
+      }
+    }
+  }
+
+  private stepPrismRefraction(beamTower: PlacedTower, primary: ActiveEnemy, rawDamage: number): void {
+    const origin = this.towerCenter(beamTower.tile, beamTower.spec);
+    const target = { x: primary.sprite.x, y: primary.sprite.y };
+    const dx = target.x - origin.x; const dy = target.y - origin.y;
+    const length2 = dx * dx + dy * dy;
+    if (!length2) return;
+    const mirrors = this.towers.filter((tower) => tower.spec.attackType === 'prism').flatMap((mirror) => {
+      const point = this.towerCenter(mirror.tile, mirror.spec);
+      const t = ((point.x - origin.x) * dx + (point.y - origin.y) * dy) / length2;
+      const px = origin.x + t * dx; const py = origin.y + t * dy;
+      const gap = Math.hypot(point.x - px, point.y - py);
+      const range = this.effectiveTowerRange(mirror) * BOARD.cell;
+      return t > 0.05 && t < 0.95 && gap <= BOARD.cell * 0.65 && Phaser.Math.Distance.Between(point.x, point.y, target.x, target.y) <= range
+        ? [{ mirror, point, t }] : [];
+    }).sort((a, b) => a.t - b.t);
+    const entry = mirrors[0];
+    if (!entry) return;
+    const mirror = entry.mirror;
+    const reflectedTargets = this.waveBuffTargets.get(mirror) ?? new Set<PlacedTower>();
+    reflectedTargets.add(beamTower);
+    this.waveBuffTargets.set(mirror, reflectedTargets);
+    const targetCount = mirror.ranks[0]! >= 2 ? 4 : mirror.ranks[0]! >= 1 ? 3 : 2;
+    const extraTargets = this.enemies.filter((enemy) => enemy.alive && enemy !== primary
+      && Phaser.Math.Distance.Between(entry.point.x, entry.point.y, enemy.sprite.x, enemy.sprite.y) <= this.effectiveTowerRange(mirror) * BOARD.cell)
+      .sort((a, b) => this.targetDistanceToMirror(a, entry.point) - this.targetDistanceToMirror(b, entry.point))
+      .slice(0, targetCount - 1);
+    const multiplier = mirror.ranks[1]! >= 2 ? 1.2 : 1;
+    for (const enemy of extraTargets) {
+      this.damageEnemy(enemy, beamTower, rawDamage * multiplier, true);
+      const reflected = this.addToBoard(this.add.graphics().setDepth(6));
+      reflected.lineStyle(2.5, 0x87e5ea, 0.9).lineBetween(entry.point.x, entry.point.y, enemy.sprite.x, enemy.sprite.y);
+      this.tweens.add({ targets: reflected, alpha: 0, duration: 180, onComplete: () => reflected.destroy() });
+    }
+  }
+
+  private targetDistanceToMirror(enemy: ActiveEnemy, point: { x: number; y: number }): number {
+    return Phaser.Math.Distance.Between(point.x, point.y, enemy.sprite.x, enemy.sprite.y);
   }
 
   private stepTrafficLight(tower: PlacedTower, dt: number): void {
@@ -3557,21 +4063,31 @@ export class GameScene extends Phaser.Scene {
   }
 
   private applyTowerAuras(tower: PlacedTower): void {
-    if (tower.disabledUntil > this.simTime) return;
+    if (tower.disabledUntil > this.simTime || (tower.passiveUpgradeTimers.get('aura-muted-until') ?? 0) > this.simTime) return;
     const teddyAura = tower.spec.id === 'giantMechTeddyBear';
     const teddyShield = teddyAura && tower.ranks[0]! >= 5;
     const clawAura = tower.spec.id === 'arcadeClawMachine' && tower.ranks[1]! >= 2;
     const clawRush = tower.spec.id === 'arcadeClawMachine' && tower.ranks[1]! >= 7
       && (tower.passiveUpgradeTimers.get('claw-rush-until') ?? 0) > this.simTime;
     const pigeonRangeAura = tower.spec.id === 'angryPigeon' && tower.ranks[1]! >= 4;
-    if (tower.spec.attackType !== 'supportLaser' && !teddyAura && !clawAura && !clawRush && !pigeonRangeAura && tower.pigeonAuraBonus <= 0 && tower.nearbyFireRateBonus <= 0 && tower.passiveSlow <= 0 && tower.auraSlow <= 0) return;
+    const espressoAura = tower.spec.id === 'espressoMachine';
+    if (tower.spec.attackType !== 'supportLaser' && !espressoAura && !teddyAura && !clawAura && !clawRush && !pigeonRangeAura && tower.pigeonAuraBonus <= 0 && tower.nearbyFireRateBonus <= 0 && tower.passiveSlow <= 0 && tower.auraSlow <= 0) return;
     const center = this.towerGridCenter(tower);
+    const utilityRange = this.mutationStack('doubleEdgedRange') && ['leafBlowerGuy', 'freezeRayIceCreamTruck', 'stickyBubblegumDispenser', 'discoTurret', 'cardboardFortress', 'espressoMachine', 'prismMirror'].includes(tower.spec.id) ? 2 : 1;
+    const espressoActive = (tower.passiveUpgradeTimers.get('espresso-shot-until') ?? 0) > this.simTime;
+    const syrupActive = (tower.passiveUpgradeTimers.get('espresso-syrup-until') ?? 0) > this.simTime;
+    const espressoRecipients = espressoAura && tower.ranks[0]! >= 2
+      ? this.towers.filter((nearby) => nearby !== tower)
+        .sort((a, b) => Phaser.Math.Distance.Between(center.x, center.y, this.towerGridCenter(a).x, this.towerGridCenter(a).y)
+          - Phaser.Math.Distance.Between(center.x, center.y, this.towerGridCenter(b).x, this.towerGridCenter(b).y)).slice(0, 3)
+      : undefined;
     for (const nearby of this.towers) {
       if (nearby === tower) continue;
+      if (espressoRecipients && !espressoRecipients.includes(nearby)) continue;
       const other = this.towerGridCenter(nearby);
       const distance = Math.hypot(center.x - other.x, center.y - other.y);
       const mapWideTraffic = tower.spec.id === 'sentientTrafficLight' && (tower.passiveUpgradeTimers.get('traffic-active-until') ?? 0) > this.simTime && tower.ranks[1]! >= 7;
-      if (mapWideTraffic || clawRush || distance <= (teddyAura ? 6 * tower.cuddleAuraRadiusMultiplier * this.globalRangeMultiplier() : tower.spec.range * tower.rangeMultiplier * this.globalRangeMultiplier())) {
+      if (mapWideTraffic || clawRush || distance <= (teddyAura ? 6 * tower.cuddleAuraRadiusMultiplier * this.globalRangeMultiplier() : tower.spec.range * tower.rangeMultiplier * this.globalRangeMultiplier() * utilityRange)) {
         if (teddyShield) {
           const key = `teddy-shield-${nearby.tile.x},${nearby.tile.y}`;
           if (this.simTime >= (tower.passiveUpgradeTimers.get(key) ?? 0)) {
@@ -3581,6 +4097,15 @@ export class GameScene extends Phaser.Scene {
         }
         let buffed = false;
         if (tower.spec.attackType === 'supportLaser') { nearby.attackSpeedMultiplier = Math.max(nearby.attackSpeedMultiplier, 1 + 0.15 * tower.supportPowerMultiplier); buffed = true; }
+        if (espressoAura) {
+          const speedBonus = Math.max(tower.ranks[0]! >= 2 ? 0.3 : tower.ranks[0]! >= 1 ? 0.2 : 0.15,
+            espressoActive ? 0.5 : 0, syrupActive ? 0.2 : 0);
+          nearby.attackSpeedMultiplier = Math.max(nearby.attackSpeedMultiplier, 1 + speedBonus * tower.supportPowerMultiplier);
+          const rangeBonus = syrupActive ? 0.25 : tower.ranks[2]! >= 1 ? 0.1 : 0;
+          if (rangeBonus) nearby.pigeonRangeAuraMultiplier = Math.max(nearby.pigeonRangeAuraMultiplier, 1 + rangeBonus * tower.supportPowerMultiplier);
+          if (tower.ranks[0]! >= 3) nearby.damageAuraMultiplier = Math.max(nearby.damageAuraMultiplier, 1.1);
+          buffed = true;
+        }
         if (teddyAura) { nearby.attackSpeedMultiplier = Math.max(nearby.attackSpeedMultiplier, 1 + 0.05 * tower.cuddleAuraPowerMultiplier); buffed = true; }
         if (tower.pigeonAuraBonus > 0 && nearby.spec.id === 'angryPigeon') { nearby.attackSpeedMultiplier = Math.max(nearby.attackSpeedMultiplier, 1 + tower.pigeonAuraBonus); buffed = true; }
         if (tower.spec.id === 'angryPigeon' && tower.ranks[1]! >= 4 && nearby.spec.id === 'angryPigeon') nearby.pigeonRangeAuraMultiplier = Math.max(nearby.pigeonRangeAuraMultiplier, 1.2);
@@ -3623,7 +4148,10 @@ export class GameScene extends Phaser.Scene {
   }
 
   private applySlow(enemy: ActiveEnemy, amount: number, seconds: number, source?: PlacedTower, allowBoss = false): void {
+    if (this.mutationStack('antiMagicField')) return;
     if ((enemy.spec.boss && !allowBoss) || this.simTime < enemy.ccImmuneUntil) return;
+    if (this.eliteCount(enemy, 'frostTempered') > 0 && source?.spec.attackType === 'freeze') return;
+    if (this.simTime < (enemy.passiveStacks.get('microwave-chill-immunity-until') ?? 0)) return;
     const effectiveness = enemy.spec.miniboss ? 0.5 : 1;
     const weakenedSlow = Math.max(0, amount - this.mutationStack('weakeningSlow') * 0.15);
     const effectiveSlow = Math.min(0.9, weakenedSlow * effectiveness);
@@ -3639,6 +4167,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private applyStun(enemy: ActiveEnemy, seconds: number, allowBoss = false, source?: PlacedTower): void {
+    if (this.mutationStack('antiMagicField')) return;
     if ((enemy.spec.boss && !allowBoss) || this.simTime < enemy.ccImmuneUntil || this.simTime < enemy.stunImmuneUntil || this.eliteCount(enemy, 'nullField') > 0) return;
     if (this.consumeHermesCrowdControl(enemy)) return;
     const stunBonus = source?.spec.id === 'arcadeClawMachine' && source.ranks[2]! >= 1 ? 1.05 : 1;
@@ -3647,7 +4176,9 @@ export class GameScene extends Phaser.Scene {
   }
 
   private applyFreeze(enemy: ActiveEnemy, seconds: number, source?: PlacedTower, allowBoss = false): void {
+    if (this.mutationStack('antiMagicField')) return;
     if ((enemy.spec.boss && !allowBoss) || this.simTime < enemy.ccImmuneUntil || this.simTime < enemy.stunImmuneUntil || this.eliteCount(enemy, 'nullField') > 0) return;
+    if (this.eliteCount(enemy, 'frostTempered') > 0 || this.simTime < (enemy.passiveStacks.get('microwave-chill-immunity-until') ?? 0)) return;
     if (this.consumeHermesCrowdControl(enemy)) return;
     const duration = seconds * (enemy.spec.miniboss ? 0.5 : 1);
     enemy.freezeUntil = Math.max(enemy.freezeUntil, this.simTime + duration);
@@ -3662,11 +4193,14 @@ export class GameScene extends Phaser.Scene {
   private mutationStack(id: string): number { return this.mutationStacks[id] ?? 0; }
   private globalAttackSpeedMultiplier(): number {
     const stackables = Math.max(0.05, 1 + Math.min(1.5, this.mutationStack('rapidFire') * 0.1) - Math.min(0.5, this.mutationStack('sluggishMechanisms') * 0.08));
-    return stackables * (this.mutationStack('systemSlowdown') ? 0.6 : 1);
+    const chrono = this.mutationStack('chronoInstability') && this.simTime % 15 < 5 ? 0.75 : 1;
+    return stackables * (this.mutationStack('systemSlowdown') ? 0.6 : 1) * (this.mutationStack('overclockedAssembly') ? 1.4 : 1) * chrono;
   }
   private globalRangeMultiplier(): number {
     const odyssey = this.odysseyMode ? this.odysseyState?.nextRangeBoost ?? 1 : 1;
-    return Math.max(0.1, 1 + Math.min(1.5, this.mutationStack('extendedReach') * 0.15) - Math.min(0.3, this.mutationStack('narrowedSights') * 0.05)) * (this.mutationStack('shortLeash') ? 0.5 : 1) * odyssey;
+    return Math.max(0.1, 1 + Math.min(1.5, this.mutationStack('extendedReach') * 0.15) - Math.min(0.3, this.mutationStack('narrowedSights') * 0.05))
+      * (this.mutationStack('shortLeash') ? 0.5 : 1) * (this.mutationStack('overclockedAssembly') ? 0.85 : 1)
+      * (this.mutationStack('eclipseOfTheSun') ? 0.82 : 1) * odyssey;
   }
   private effectiveTowerRange(tower: PlacedTower): number {
     const center = this.towerGridCenter(tower);
@@ -3680,12 +4214,12 @@ export class GameScene extends Phaser.Scene {
     });
     return tower.spec.range * tower.rangeMultiplier * (greenSignal ? 1.3 : 1);
   }
-  private globalDamageMultiplier(): number { const odyssey = this.odysseyMode ? this.odysseyState?.nextDamageBoost ?? 1 : 1; return Math.max(0.1, 1 - Math.min(0.5, this.mutationStack('dulledImpact') * 0.1)) * (this.mutationStack('glassCannons') ? 1.5 : 1) * odyssey; }
+  private globalDamageMultiplier(): number { const odyssey = this.odysseyMode ? this.odysseyState?.nextDamageBoost ?? 1 : 1; return Math.max(0.1, 1 - Math.min(0.5, this.mutationStack('dulledImpact') * 0.1)) * (this.mutationStack('glassCannons') ? 1.5 : 1) * (this.mutationStack('glassCannonEconomy') ? 1.5 : 1) * odyssey; }
   private statusDurationMultiplier(): number { return 1 + Math.min(1.5, this.mutationStack('lingeringEffects') * 0.15); }
   private enemySpawnRateMultiplier(): number { return 1 + Math.min(1, this.mutationStack('crowdedWaves') * 0.1); }
   private upgradePrice(base: number, target?: PlacedTower): number {
     const multiplier = Math.max(0.1, 1 + Math.min(1, this.mutationStack('priceHike') * 0.1)
-      - Math.min(0.5, this.mutationStack('discountPath') * 0.1));
+      - Math.min(0.5, this.mutationStack('discountPath') * 0.1)) * (this.mutationStack('glassCannonEconomy') ? 1.35 : 1);
     const upgradedTower = target ?? this.selectedTower;
     const sodaDiscount = upgradedTower && this.towers.some((soda) => soda.spec.id === 'sodaMachineMech' && soda.ranks[1]! >= 4
       && Math.hypot(this.towerGridCenter(soda).x - this.towerGridCenter(upgradedTower).x, this.towerGridCenter(soda).y - this.towerGridCenter(upgradedTower).y) <= 4) ? 0.9 : 1;
@@ -3831,16 +4365,58 @@ export class GameScene extends Phaser.Scene {
     this.modifierOverlayObjects.push(backdrop, panel, title, list, pageLabel, close, closeLabel);
   }
 
+  private enemyFacesPoint(enemy: ActiveEnemy, point: { x: number; y: number }): boolean {
+    const index = Math.min(Math.floor(enemy.pathProgress), enemy.route.length - 2);
+    const from = enemy.route[index]!; const to = enemy.route[index + 1]!;
+    const fx = to.x - from.x; const fy = to.y - from.y;
+    const center = { x: enemy.sprite.x, y: enemy.sprite.y };
+    const dx = point.x - center.x; const dy = point.y - center.y;
+    return dx * fx + dy * fy > Math.hypot(dx, dy) * 0.65;
+  }
+
   private damageEnemy(enemy: ActiveEnemy, tower: PlacedTower | undefined, rawDamage: number, singleTargetHit = false, impactResolved = false, damageCreditSource?: PlacedTower, exactDamage = false): void {
     if (!enemy.alive) return;
     if (enemy.spec.ability === 'doomsdayClockworkGoliath' && enemy.megaPhase === 3 && this.simTime < enemy.megaTransitionUntil) return;
     if (tower && !exactDamage && this.mutationStack('unsteadyAim') && Math.random() < 0.1) return;
     if (tower && !exactDamage) rawDamage = this.applyUpgradeHitEffects(tower, enemy, rawDamage, singleTargetHit);
+    if (tower && PHYSICAL_PROJECTILE_TOWER_IDS.has(tower.spec.id) && enemy.spec.ability !== 'magnetBot') {
+      const magnet = this.enemies.find((candidate) => candidate.alive && candidate.spec.ability === 'magnetBot'
+        && candidate.route === enemy.route && Math.abs(candidate.pathProgress - enemy.pathProgress) <= 3
+        && Phaser.Math.Distance.Between(enemy.sprite.x, enemy.sprite.y, candidate.sprite.x, candidate.sprite.y) <= 3 * BOARD.cell);
+      if (magnet) enemy = magnet;
+    }
     if (tower && PHYSICAL_PROJECTILE_TOWER_IDS.has(tower.spec.id)) {
-      const vacuum = this.enemies.find((candidate) => candidate.alive && candidate.spec.ability === 'cosmicVacuum'
+      const vacuum = this.enemies.find((candidate) => candidate.alive && (candidate.spec.ability === 'cosmicVacuum' || candidate.spec.ability === 'vacuumMini')
         && this.simTime < candidate.suctionUntil
         && Phaser.Math.Distance.Between(enemy.sprite.x, enemy.sprite.y, candidate.sprite.x, candidate.sprite.y) <= 6 * BOARD.cell);
       if (vacuum) enemy = vacuum;
+    }
+    if (enemy.spec.ability === 'bubbleWrap' && !exactDamage) {
+      const layers = enemy.passiveStacks.get('bubble-wrap-layers') ?? 0;
+      if (layers > 0) {
+        enemy.passiveStacks.set('bubble-wrap-layers', layers - 1);
+        const pop = this.addToBoard(this.add.circle(enemy.sprite.x, enemy.sprite.y, enemy.sprite.radius, 0x9befff, 0.62).setStrokeStyle(2, 0xf2ffff, 1).setDepth(8));
+        this.tweens.add({ targets: pop, scale: 1.8, alpha: 0, duration: 220, onComplete: () => pop.destroy() });
+        return;
+      }
+    }
+    const areaAttack = Boolean(tower && (tower.spec.attackType === 'splash' || tower.spec.attackType === 'burnAura'
+      || ['arcadeClawMachine', 'hydraulicCarCrusher', 'sentientMicrowaveOven', 'hotSauceSprinkler', 'glueCannon'].includes(tower.spec.id)));
+    if (tower && enemy.spec.ability === 'stuffedTeddy' && areaAttack) rawDamage *= 0.7;
+    if (tower && enemy.spec.ability === 'castIronSkillet' && PHYSICAL_PROJECTILE_TOWER_IDS.has(tower.spec.id)
+      && this.enemyFacesPoint(enemy, this.towerCenter(tower.tile, tower.spec))) rawDamage *= 0.5;
+    if (tower && enemy.spec.ability === 'garbageCompactor' && PHYSICAL_PROJECTILE_TOWER_IDS.has(tower.spec.id)
+      && this.enemyFacesPoint(enemy, this.towerCenter(tower.tile, tower.spec))) rawDamage *= 0.4;
+    if (tower?.spec.attackType === 'beam' && enemy.spec.ability === 'mirrorShard') {
+      tower.siphonSlowAmount = Math.max(tower.siphonSlowAmount, 0.2);
+      tower.siphonSlowUntil = Math.max(tower.siphonSlowUntil, this.simTime + 1);
+    }
+    if (tower && this.eliteCount(enemy, 'voidBound') > 0 && areaAttack) {
+      const redirected = rawDamage * 0.5;
+      rawDamage -= redirected;
+      const allies = this.enemies.filter((candidate) => candidate.alive && candidate !== enemy && candidate.elites.length === 0
+        && candidate.route === enemy.route && Math.abs(candidate.pathProgress - enemy.pathProgress) <= 1);
+      for (const ally of allies) ally.hp = Math.min(ally.maxHp, ally.hp + redirected / Math.max(1, allies.length));
     }
     if (tower && PHYSICAL_PROJECTILE_TOWER_IDS.has(tower.spec.id) && enemy.spec.ability === 'abyssalJunkHydra'
       && this.simTime < (enemy.passiveStacks.get('hydra-vortex-until') ?? 0)) return;
@@ -3853,7 +4429,7 @@ export class GameScene extends Phaser.Scene {
       && this.distanceToPathTiles(this.towerGridCenter(claw), enemy.pathProgress, enemy.route) <= 4 * this.globalRangeMultiplier())) rawDamage *= 1.5;
     let ignoresArmorOnCritical = false;
     if (tower) {
-      if (!exactDamage) rawDamage *= this.globalDamageMultiplier();
+      if (!exactDamage) rawDamage *= this.globalDamageMultiplier() * tower.damageAuraMultiplier;
       const criticalChance = Math.min(1, this.mutationStack('keenAim') * 0.1);
       const clawCritAura = this.towers.some((claw) => claw.spec.id === 'arcadeClawMachine' && claw.ranks[1]! >= 4
         && this.distanceToPathTiles(this.towerGridCenter(claw), enemy.pathProgress, enemy.route) <= claw.spec.range * claw.rangeMultiplier);
@@ -3866,6 +4442,15 @@ export class GameScene extends Phaser.Scene {
       });
       const upgradeCrit = Math.min(1, Math.max(tower.criticalChance, clawCritAura || trafficCritAura ? 0.15 : 0));
       const criticalHit = Math.random() < Math.max(criticalChance, upgradeCrit);
+      if (!exactDamage && tower.spec.id === 'staplerTurret') {
+        if (criticalHit && !enemy.spec.boss && !enemy.spec.miniboss && !/heavy|anvil|compactor/i.test(enemy.spec.name)) this.applyStun(enemy, 1.5, false, tower);
+        const bindRank = tower.ranks[2]!;
+        const bindReduction = bindRank >= 3 ? 0.1 : bindRank >= 2 ? 0.05 : 0;
+        if (bindReduction && (enemy.spec.armor > 0 || bindRank >= 7 && tower.shotCounter % 5 === 0)) {
+          enemy.trafficHyperarmorReduction = Math.max(enemy.trafficHyperarmorReduction, bindRank >= 3 ? 0.1 : bindReduction);
+          enemy.trafficHyperarmorUntil = Math.max(enemy.trafficHyperarmorUntil, this.simTime + (bindRank >= 4 ? 6 : 4));
+        }
+      }
       if (!exactDamage && criticalHit && tower.spec.id === 'lawnDartGnome' && tower.ranks[0]! >= 7) {
         rawDamage *= 4;
         ignoresArmorOnCritical = true;
@@ -3881,9 +4466,20 @@ export class GameScene extends Phaser.Scene {
     const dent = enemy.passiveStacks.get('crusher-dent') ?? 0;
     const activeArmorShred = this.simTime < enemy.armorShredUntil ? enemy.armorShred : 0;
     const totalArmor = enemy.spec.armor + this.ironArmorAura(enemy);
-    const effectiveArmor = ignoresArmorOnCritical ? 0 : totalArmor < 0 ? totalArmor : Math.max(0, totalArmor - dent * 5) * (1 - Math.max(activeArmorShred, activeClawShred));
+    const flatStrippedArmor = Math.max(-5, totalArmor - enemy.armorFlatShred);
+    let effectiveArmor = ignoresArmorOnCritical ? 0 : flatStrippedArmor < 0 ? flatStrippedArmor : Math.max(0, flatStrippedArmor - dent * 5) * (1 - Math.max(activeArmorShred, activeClawShred));
+    if (tower?.spec.id === 'lawnAerator') {
+      const penetration = tower.ranks[0]! >= 7 ? 0.8 : (tower.ranks[0]! >= 4 ? 0.4 : tower.ranks[0]! >= 1 ? 0.15 : 0);
+      effectiveArmor *= 1 - penetration;
+    }
+    if (tower?.spec.id === 'teslaCoilLamp' && tower.ranks[0]! >= 5) effectiveArmor = Math.max(0, effectiveArmor - 4);
+    if (tower?.spec.id === 'staplerTurret' && tower.ranks[0]! >= 7) effectiveArmor = Math.max(0, effectiveArmor - 5);
+    if (tower?.spec.id === 'teslaCoilLamp' && enemy.megaShieldHp > 0) rawDamage *= 1.5;
     const afterArmor = exactDamage ? rawDamage : Math.max(1, rawDamage - effectiveArmor);
     let damageTakenMultiplier = this.simTime < enemy.damageTakenUntil ? enemy.damageTakenMultiplier : 1;
+    const damageSource = tower ?? damageCreditSource;
+    const thermalSource = damageSource && ['sentientMicrowaveOven', 'hotSauceSprinkler'].includes(damageSource.spec.id);
+    if (thermalSource && this.simTime < enemy.thermalDamageTakenUntil) damageTakenMultiplier *= enemy.thermalDamageTakenMultiplier;
     if (tower && enemy.wetUntil > this.simTime && (tower.spec.attackType === 'freeze' || tower.spec.id === 'unstableToasterLauncher')) damageTakenMultiplier *= 1.25;
     if (tower && PHYSICAL_PROJECTILE_TOWER_IDS.has(tower.spec.id) && enemy.slowUntil > this.simTime
       && this.towers.some((soda) => soda.spec.id === 'sodaMachineMech' && soda.ranks[2]! >= 4
@@ -3920,6 +4516,17 @@ export class GameScene extends Phaser.Scene {
     // Summoned units pass their owning tower here so only actual HP removed
     // contributes to that tower's wave damage and mastery score.
     if (creditSource && actualHpRemoved > 0) this.waveDamageByTower.set(creditSource, (this.waveDamageByTower.get(creditSource) ?? 0) + actualHpRemoved);
+    if (tower && !exactDamage && this.mutationStack('pinballAlley') && Math.random() < 0.08) {
+      const ricochet = this.enemies.filter((candidate) => candidate.alive && candidate !== enemy && candidate.route === enemy.route
+        && Math.abs(candidate.pathProgress - enemy.pathProgress) <= 4)
+        .sort((a, b) => Math.abs(a.pathProgress - enemy.pathProgress) - Math.abs(b.pathProgress - enemy.pathProgress))[0];
+      if (ricochet) {
+        const bounce = this.addToBoard(this.add.graphics().setDepth(7));
+        bounce.lineStyle(1.4, 0x9bf2ff, 0.95).lineBetween(enemy.sprite.x, enemy.sprite.y, ricochet.sprite.x, ricochet.sprite.y);
+        this.tweens.add({ targets: bounce, alpha: 0, duration: 180, onComplete: () => bounce.destroy() });
+        this.damageEnemy(ricochet, tower, rawDamage * 0.5, true, true);
+      }
+    }
     if (tower && singleTargetHit && enemy.spec.ability === 'bubbleBath' && damage > 50) this.spawnSoapPuddle(enemy.pathProgress, enemy.route);
     if (tower && singleTargetHit) this.leaveTrackResidue(tower, enemy.pathProgress, enemy.route);
     if (tower?.spec.id === 'arcadeClawMachine' && tower.ranks[0]! >= 6) {
@@ -3954,12 +4561,33 @@ export class GameScene extends Phaser.Scene {
       if ((enemy.spec.boss || enemy.spec.miniboss) && this.towers.some((soda) => soda.spec.id === 'sodaMachineMech' && soda.ranks[1]! >= 6
         && this.distanceToPathTiles(this.towerGridCenter(soda), enemy.pathProgress, enemy.route) <= soda.spec.range * soda.rangeMultiplier)) bounty += 50;
       if (this.endlessMode && enemy.waveNumber > 15 && enemy.spec.ability !== 'doomsdayClockworkGoliath' && enemy.spec.ability !== 'abyssalJunkHydra') bounty = Math.floor(bounty * endlessBountyMultiplier(enemy.waveNumber));
+      if (this.mutationStack('goldenCurse')) bounty *= 2;
       if (this.mutationStack('phantomBounties')) {
         const roll = Math.random();
         bounty *= roll < 0.25 ? 2 : roll < 0.5 ? 0 : 1;
       }
       this.coins += bounty;
       this.run.coins = this.coins;
+      if (enemy.passiveStacks.get('bounty-hunter-mark')) {
+        const progress = this.registry.get('mapProgress') as { gems: number; unlockedMaps: MapId[] };
+        progress.gems += 5; this.registry.set('mapProgress', progress);
+        this.gridFeedback = 'BOUNTY HUNTER MARK · +5 GEMS';
+      }
+      if (this.mutationStack('goldenCurse') && enemy.spec.ability !== 'coinGeist') this.createEnemy('coinGeist', enemy.pathProgress, enemy.route);
+      if (this.mutationStack('radioactiveFallout')) this.leaveRadioactivePuddle(enemy);
+      if (this.mutationStack('hivemindSwarm')) for (const survivor of this.enemies) if (survivor.alive && survivor !== enemy) {
+        survivor.speedBoostAmount = survivor.speedBoostUntil > this.simTime ? survivor.speedBoostAmount + 0.05 : 0.05;
+        survivor.speedBoostUntil = this.simTime + 3;
+      }
+      if (!enemy.spec.boss && !enemy.spec.miniboss && enemy.spec.ability !== 'coinGeist') {
+        const compactor = this.enemies.find((candidate) => candidate.alive && candidate.spec.ability === 'garbageCompactor'
+          && candidate.route === enemy.route && Math.abs(candidate.pathProgress - enemy.pathProgress) <= 4);
+        if (compactor) {
+          compactor.megaShieldHp = Math.min(compactor.maxHp * 0.1, compactor.megaShieldHp + 150);
+          const shieldFlash = this.addToBoard(this.add.circle(compactor.sprite.x, compactor.sprite.y, compactor.sprite.radius + 5, 0x9fc996, 0.18).setStrokeStyle(2, 0xcfffc6, 0.85).setDepth(6));
+          this.tweens.add({ targets: shieldFlash, alpha: 0, duration: 450, onComplete: () => shieldFlash.destroy() });
+        }
+      }
       this.triggerEnemyDefeatAbility(enemy);
       this.removeEnemy(enemy);
     } else if (!exactDamage && tower && this.mutationStack('echoProjectiles') && tower.shotCounter > 0 && tower.shotCounter % 10 === 0) {
@@ -4043,12 +4671,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   private copyHasAttackRole(tower: PlacedTower): boolean {
-    const supportOnly = new Set(['leafBlowerGuy', 'freezeRayIceCreamTruck', 'stickyBubblegumDispenser', 'discoTurret', 'cardboardFortress']);
+    const supportOnly = new Set(['leafBlowerGuy', 'freezeRayIceCreamTruck', 'stickyBubblegumDispenser', 'discoTurret', 'cardboardFortress', 'espressoMachine', 'prismMirror']);
     return !supportOnly.has(tower.spec.id) || this.copyIsHybrid(tower);
   }
 
   private copyHasSupportRole(tower: PlacedTower): boolean {
-    const supportTypes = new Set(['leafBlowerGuy', 'freezeRayIceCreamTruck', 'stickyBubblegumDispenser', 'discoTurret', 'cardboardFortress']);
+    const supportTypes = new Set(['leafBlowerGuy', 'freezeRayIceCreamTruck', 'stickyBubblegumDispenser', 'discoTurret', 'cardboardFortress', 'espressoMachine', 'prismMirror']);
     return supportTypes.has(tower.spec.id) || this.copyIsHybrid(tower);
   }
 
@@ -4124,10 +4752,18 @@ export class GameScene extends Phaser.Scene {
     if (tower?.spec.id === 'lawnDartGnome' && tower.ranks[1]! >= 7) return 'Attack: javelin · wide-radius stun';
     if (tower?.spec.id === 'lawnDartGnome' && tower.ranks[2]! >= 7) return 'Attack: darts · summons track-running gnomes';
     if (tower?.spec.id === 'cosmicRoomba' && tower.ranks[2]! >= 7) return 'Attack: single target · deploys mini-Roomba fleet';
-    if (spec.attackType === 'supportLaser' && !(tower && this.copyHasAttackRole(tower))) return 'Support aura · no direct attack';
+    if ((spec.attackType === 'supportLaser' || spec.attackType === 'espresso' || spec.attackType === 'prism') && !(tower && this.copyHasAttackRole(tower))) return 'Support effect · no direct attack';
     if (spec.attackType === 'fortress') return 'Attack: deploys route blockers; choose a path to add combat units';
     if (spec.attackType === 'claw') return 'Attack: single-target claw grab';
     if (spec.attackType === 'trafficLight') return 'Attack: cycles red damage, green tower support, and yellow enemy debuffs';
+    if (spec.attackType === 'bubble') return 'Attack: bubbles pop on contact, splash, and briefly trap light enemies';
+    if (spec.attackType === 'salt') return 'Attack: sprays all enemies in a short directional cone';
+    if (spec.attackType === 'aerator') return 'Attack: strikes all enemies crossing its adjacent lane';
+    if (spec.attackType === 'fan') return 'Attack: pushes all enemies caught in its directional cone';
+    if (spec.attackType === 'espresso') return 'Support: buffs nearby towers with attack speed';
+    if (spec.attackType === 'prism') return 'Support: splits laser beams that cross the mirror';
+    if (spec.attackType === 'glue') return 'Attack: area blast coats and slows multiple enemies';
+    if (spec.attackType === 'pendulum') return 'Attack: damages and rewinds enemies along their route';
     if (spec.attackType === 'burnAura') return 'Attack: hits every enemy in range';
     if (spec.attackType === 'push') return 'Attack: damages and pushes enemies in a cone';
     if (spec.attackType === 'teddy') return 'Attack: stomps all nearby enemies · rockets hit up to 2';
@@ -4172,7 +4808,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private applyPushback(enemy: ActiveEnemy, distance: number): void {
-    if (!enemy.alive || enemy.spec.miniboss || enemy.spec.boss || this.eliteCount(enemy, 'nullField') > 0 || this.simTime < enemy.pushImmuneUntil) return;
+    if (this.mutationStack('antiMagicField') || !enemy.alive || enemy.spec.miniboss || enemy.spec.boss || this.eliteCount(enemy, 'nullField') > 0 || this.simTime < enemy.pushImmuneUntil) return;
     enemy.pathProgress = Math.max(0, enemy.pathProgress - distance);
     enemy.pushImmuneUntil = this.simTime + 0.8;
     this.positionEnemy(enemy);
@@ -4242,12 +4878,25 @@ export class GameScene extends Phaser.Scene {
 
   private completeWave(advanceImmediately = false): void {
     this.awardWaveTowerXp();
+    if (this.draftMode === 'endless') this.registry.set('draftEndlessBestWave', Math.max(this.wave, Number(this.registry.get('draftEndlessBestWave') ?? 0)));
     const n = this.wave <= 24 ? 5 : 7 + 2 * Math.floor((this.wave - 25) / 10);
     const basePayout = this.endlessMode ? Math.min(3800, 300 + 2 * this.star * n * this.wave) : waveClearPayout(this.wave, this.star);
-    const payout = Math.min(3800, Math.floor(basePayout * (1 + Math.min(1.5, this.mutationStack('bountySurge') * 0.2))));
+    const payout = Math.min(3800, Math.floor(basePayout
+      * (1 + Math.min(1.5, this.mutationStack('bountySurge') * 0.2))
+      * (this.mutationStack('resourceScarcity') ? 0.4 : 1)));
     this.coins += payout;
     this.run.coins = this.coins;
     this.lastWavePayout = payout;
+    if (this.mutationStack('emergencyBreakdown') && this.wave % 5 === 0) {
+      const candidates = this.towers.filter((tower) => tower.totalUpgrades >= 3 && !tower.passiveUpgradeTimers.has('breakdown'));
+      const broken = candidates[Math.floor(Math.random() * candidates.length)];
+      if (broken) {
+        broken.passiveUpgradeTimers.set('breakdown', 1);
+        broken.disabledUntil = Number.POSITIVE_INFINITY;
+        broken.label.setText('BROKEN · $300').setColor('#ff7b68');
+        this.gridFeedback = `${broken.spec.name.toUpperCase()} BROKE DOWN · $300 REPAIR`;
+      }
+    }
     if (this.odysseyMode && this.odysseyState) {
       this.odysseyState.vaultXp += 100;
       this.odysseyState.baseHealth = this.baseHealth;
@@ -4278,7 +4927,7 @@ export class GameScene extends Phaser.Scene {
     if (!this.odysseyState) return;
     this.odysseyState.vaultGems += 5;
     this.odysseyState.baseHealth = this.baseHealth;
-    this.odysseyState.carryCoins = Math.min(1500, Math.floor(this.coins * 0.5));
+    this.odysseyState.carryCoins = Math.min(1500, Math.floor(this.coins * 0.5 * (this.mutationStack('resourceScarcity') ? 0.4 : 1)));
     // Reinforcements last for the next map only.
     this.odysseyState.nextDamageBoost = 1;
     this.odysseyState.nextRangeBoost = 1;
@@ -4345,7 +4994,7 @@ export class GameScene extends Phaser.Scene {
     const continueText = add(this.add.text(520, continueY, 'CONTINUE EXPEDITION', { fontFamily: 'Arial', fontSize: '12px', color: '#fff5d7', fontStyle: 'bold' }).setOrigin(0.5).setInteractive({ useHandCursor: true }));
     const continueRun = () => {
       if (branchNode && !next.branchMutationId) { feedback.setText('Choose Route A or B before continuing.'); return; }
-      state.nodeIndex += 1; state.baseHealth = this.baseHealth; state.carryCoins = Math.min(1500, Math.floor(this.coins * 0.5));
+      state.nodeIndex += 1; state.baseHealth = this.baseHealth; state.carryCoins = Math.min(1500, Math.floor(this.coins * 0.5 * (this.mutationStack('resourceScarcity') ? 0.4 : 1)));
       this.registry.set('odysseyState', state); this.registry.set('selectedMapId', state.nodes[state.nodeIndex]!.mapId); this.scene.restart();
     };
     continueButton.on('pointerdown', continueRun); continueText.on('pointerdown', continueRun);
@@ -4400,6 +5049,9 @@ export class GameScene extends Phaser.Scene {
     const baseXp = Math.floor(state.vaultXp * retain);
     const bonusXp = fullVictory ? state.length === 3 ? 1000 : 2500 : 0;
     const gems = Math.floor(state.vaultGems * retain) + (fullVictory ? state.length === 3 ? 15 : 40 : 0);
+    if (retain === 0.75) this.registry.set('odysseyExtractions', Number(this.registry.get('odysseyExtractions') ?? 0) + 1);
+    if (fullVictory && state.length === 3) this.registry.set('miniOdysseyClears', Number(this.registry.get('miniOdysseyClears') ?? 0) + 1);
+    if (fullVictory && state.length === 5) this.registry.set('grandOdysseyVictory', true);
     if (baseXp + bonusXp > 0) grantPlayerXp(this.registry, baseXp + bonusXp);
     const progress = this.registry.get('mapProgress') as { gems: number; unlockedMaps: MapId[] };
     progress.gems += gems; this.registry.set('mapProgress', progress);
@@ -4665,6 +5317,8 @@ export class GameScene extends Phaser.Scene {
     }
     const text = upgrade.description.toLowerCase();
     if (tower.spec.id === 'hydraulicCarCrusher' && pathIndex === 2 && upgrade.rank === 2) tower.rangeMultiplier *= 1.05;
+    if (tower.spec.id === 'prismMirror' && pathIndex === 2 && upgrade.rank === 1) tower.rangeMultiplier *= 1 + 1 / tower.spec.range;
+    if (tower.spec.id === 'prismMirror' && pathIndex === 2 && upgrade.rank === 2) tower.rangeMultiplier *= (tower.spec.range + 2) / (tower.spec.range + 1);
     const pct = Number(text.match(/[+]?([0-9]+(?:\.[0-9]+)?)%/)?.[1] ?? text.match(/([0-9]+(?:\.[0-9]+)?) percentage points?/)?.[1] ?? 0) / 100;
     if (text.includes('crit') && text.includes('chance')) tower.criticalChance = Math.max(tower.criticalChance, pct || 0.5);
     if (text.includes('passively generates small cash bonus')) tower.coinBonusOnStick = 1;
@@ -4719,13 +5373,13 @@ export class GameScene extends Phaser.Scene {
     }).setOrigin(0.5).setDepth(3));
     label.setVisible(false);
     const tower: PlacedTower = {
-      tile, spec, sprite, art, label, spentCoins: totalSpent, cooldown: 0, priority: this.defaultPriority, ranks: [0, 0, 0], totalUpgrades: 0, beamLockTime: 0,
-      damageMultiplier: 1, rangeMultiplier: 1, attackSpeedMultiplier: 1, blastMultiplier: 1,
+      tile, spec, sprite, art, label, spentCoins: totalSpent, cooldown: 0, priority: this.defaultPriority, aimAngle: 0, ranks: [0, 0, 0], totalUpgrades: 0, beamLockTime: 0,
+      damageMultiplier: 1, damageAuraMultiplier: 1, rangeMultiplier: 1, attackSpeedMultiplier: 1, blastMultiplier: 1,
       slowBonus: 0, slowDurationMultiplier: 1, pushBonus: 0, stunChance: 0, supportPowerMultiplier: 1, pigeonAuraBonus: 0, coinBonusOnStick: 0,
       burnDpsBonus: 0, passiveSlow: 0, auraSlow: 0, nearbyFireRateBonus: 0, trackingMultiplier: 1, cuddleAuraRadiusMultiplier: 1, cuddleAuraPowerMultiplier: 1,
       baseAttackSpeedMultiplier: 1, guanoDropTimer: 0, helperPigeons: [], helperPigeonCooldowns: [],
       pigeonAttackRampSeconds: 0, pigeonRangeAuraMultiplier: 1, armadaCooldown: 0, armadaRemaining: 0, armadaPulseTimer: 0,
-      acquiredUpgrades: [], shotCounter: 0, criticalChance: 0,
+      acquiredUpgrades: [], shotCounter: 0, criticalChance: spec.id === 'staplerTurret' ? 0.1 : 0,
       siphonSlowUntil: 0, siphonSlowAmount: 0,
       shieldHp: 0,
       passiveUpgradeTimers: new Map(),
@@ -4829,6 +5483,15 @@ export class GameScene extends Phaser.Scene {
         const key = routeKey(cell);
         if (cell.x < 0 || cell.x >= BOARD_COLUMNS || cell.y < 0 || cell.y >= BOARD_ROWS || this.roadTiles.has(key) || this.obstacleTiles.has(key) || this.towerObjects.has(key)) return false;
       }
+    }
+    if (spec.id === 'lawnAerator') {
+      let adjacentToRoad = false;
+      for (let dx = 0; dx < spec.footprint; dx += 1) for (let dy = 0; dy < spec.footprint; dy += 1) {
+        const x = tile.x + dx; const y = tile.y + dy;
+        if (this.roadTiles.has(routeKey({ x: x - 1, y })) || this.roadTiles.has(routeKey({ x: x + 1, y }))
+          || this.roadTiles.has(routeKey({ x, y: y - 1 })) || this.roadTiles.has(routeKey({ x, y: y + 1 }))) adjacentToRoad = true;
+      }
+      if (!adjacentToRoad) return false;
     }
     return true;
   }
@@ -5028,6 +5691,57 @@ export class GameScene extends Phaser.Scene {
         dot(0, -6, 2.6, 0xff5d62); dot(0, 0, 2.6, 0xffd15e); dot(0, 6, 2.6, 0x62df91);
         g.fillStyle(0x87959a, 1).fillRect(-1.2*u, 10*u, 2.4*u, 4*u);
         bar(-5, 14, 5, 14, ink, 2); break;
+      case 'bubbleBlower':
+        g.fillStyle(0x3d6474, 1).fillRoundedRect(-8*u, -6*u, 13*u, 12*u, 3*u);
+        g.fillStyle(0x2b4555, 1).fillCircle(4*u, 0, 5*u);
+        dot(7, -5, 2.5, 0xaaf6ff); dot(10, -10, 1.5, 0x75dff1); dot(11, 5, 1.2, 0xffffff);
+        bar(-7, 7, 7, 7, cream, 1); break;
+      case 'saltShaker':
+        g.fillStyle(0xf0d797, 1).fillRoundedRect(-7*u, -7*u, 14*u, 15*u, 4*u);
+        g.fillStyle(0xb58d56, 1).fillRoundedRect(-5*u, -10*u, 10*u, 4*u, 1*u);
+        [ -2, 2 ].forEach((dx) => dot(dx, -8, 0.7, ink)); dot(-2, -1, 0.9, cream); dot(2, 2, 0.9, cream);
+        bar(-7, 8, 7, 8, 0x8a6b46, 2); break;
+      case 'lawnAerator':
+        g.fillStyle(0x5f8251, 1).fillRoundedRect(-9*u, -5*u, 18*u, 10*u, 2*u);
+        g.fillStyle(0x9eabb0, 1).fillRoundedRect(-7*u, -8*u, 14*u, 7*u, 2*u);
+        [-5, -2, 2, 5].forEach((dx) => bar(dx, 5, dx - 1, 10, 0xcbd3d0, 1.5));
+        dot(-6, -2, 1, gold); dot(6, -2, 1, gold); break;
+      case 'deskFan':
+        g.fillStyle(0x547180, 1).fillRoundedRect(-8*u, 4*u, 16*u, 4*u, 1*u);
+        g.fillStyle(0x809ba4, 1).fillRect(-2*u, 1*u, 4*u, 4*u);
+        g.lineStyle(1.5*u, 0x253b4d, 1).strokeCircle(0, -3*u, 7*u);
+        for (let angle = 0; angle < 4; angle += 1) { const a = angle * Math.PI / 2; bar(Math.cos(a) * 1.5, -3 + Math.sin(a) * 1.5, Math.cos(a) * 5, -3 + Math.sin(a) * 5, cyan, 2); }
+        dot(0, -3, 2, gold); break;
+      case 'espressoMachine':
+        g.fillStyle(0x674532, 1).fillRoundedRect(-8*u, -9*u, 16*u, 18*u, 2*u);
+        g.fillStyle(0xd9c7a1, 1).fillRoundedRect(-5*u, -6*u, 10*u, 7*u, 1*u);
+        g.fillStyle(0x6c3b32, 1).fillRect(-4*u, -5*u, 8*u, 4*u);
+        bar(-5, 2, 5, 2, gold, 1.5); dot(0, 5, 1.6, 0x513426); dot(6, -5, 1.1, pink); break;
+      case 'staplerTurret':
+        g.fillStyle(0x73838b, 1).fillRoundedRect(-9*u, -3*u, 18*u, 8*u, 2*u);
+        g.fillStyle(0xb8c5c9, 1).fillRoundedRect(-7*u, -8*u, 15*u, 6*u, 2*u);
+        bar(-6, -6, 6, -6, cream, 1); bar(4, 2, 9, 2, 0x394c58, 2);
+        dot(-6, 6, 1.2, ink); dot(6, 6, 1.2, ink); break;
+      case 'prismMirror':
+        g.fillStyle(0x77dce8, 0.9).fillTriangle(0, -10*u, 9*u, 0, 0, 10*u);
+        g.lineStyle(1.5*u, 0xefffff, 1).strokeTriangle(0, -10*u, 9*u, 0, 0, 10*u);
+        bar(-7, -7, 7, 7, pink, 1.4); bar(-7, 7, 7, -7, cream, 1.4);
+        dot(0, 0, 2, gold); break;
+      case 'teslaCoilLamp':
+        g.fillStyle(0x435666, 1).fillRoundedRect(-7*u, 2*u, 14*u, 7*u, 2*u);
+        g.fillStyle(0xdac765, 1).fillRect(-4*u, -7*u, 8*u, 10*u);
+        g.lineStyle(2*u, 0x67e9ff, 0.95).strokeCircle(0, -5*u, 6*u);
+        bar(0, -10, -3, -6, 0xbaf8ff, 1.4); bar(-3, -6, 2, -3, 0xbaf8ff, 1.4); dot(0, -5, 2, cream); break;
+      case 'glueCannon':
+        g.fillStyle(0x58634e, 1).fillRoundedRect(-9*u, -5*u, 15*u, 11*u, 2*u);
+        g.fillStyle(0x8ed273, 1).fillRoundedRect(1*u, -8*u, 9*u, 6*u, 2*u);
+        g.fillStyle(0x68b95f, 1).fillCircle(7*u, -5*u, 3*u);
+        dot(-5, 8, 1.5, ink); dot(5, 8, 1.5, ink); dot(10, -8, 1.2, 0xdfff9c); break;
+      case 'quantumPendulum':
+        g.fillStyle(0x483c70, 1).fillRoundedRect(-8*u, -10*u, 16*u, 20*u, 3*u);
+        g.lineStyle(1.5*u, 0xf0ce78, 1).strokeCircle(0, 0, 7*u);
+        bar(0, -8, 0, -1, 0xf4f0dc, 1.4); bar(0, -1, 4, 5, 0xf4f0dc, 1.4);
+        dot(4, 5, 2.3, 0x83dcf0); dot(-4, 1, 1, pink); break;
     }
     return g;
   }
@@ -5068,6 +5782,28 @@ export class GameScene extends Phaser.Scene {
       case 'bubbleBath': dot(-3,-2,1.5,0xb7f5ff); dot(2,-3,2,0xd7fbff); dot(0,2,1.6,0x49bbda); dot(4,2,0.8,0xf7ffff); break;
       case 'alarm': dot(-4,-4,2,spec.color); dot(4,-4,2,spec.color); line(0,-3,0,1,light,0.9); line(0,1,3,2,light,0.9); line(-4,4,-4,6,ink,1); line(4,4,4,6,ink,1); break;
       case 'tape': g.lineStyle(Math.max(1.5,r*0.36),0xffdc55,1).strokeCircle(0,0,r*0.5); g.lineStyle(Math.max(0.8,r*0.17),0x8a6431,1).strokeCircle(0,0,r*0.2); line(-4,3,4,3,0xfff1bb,0.8); break;
+      case 'dustyCushion': g.fillStyle(0x9a8268, 1).fillRoundedRect(-r*0.55,-r*0.45,r*1.1,r*0.9,3); line(-3,-2,-1,0,light,0.8); dot(3,2,0.6,0xd9c49d); break;
+      case 'cardboardBox': g.lineStyle(1.3,0x704d31,1).strokeRect(-r*0.55,-r*0.5,r*1.1,r); line(-r*0.5,-r*0.45,r*0.5,r*0.45,0xd6a976,0.8); line(-r*0.5,r*0.45,r*0.5,-r*0.45,0xd6a976,0.8); break;
+      case 'plasticFlamingo': g.fillStyle(0xf47fa7,1).fillEllipse(-r*0.1,r*0.1,r*0.85,r*0.5); line(0,-1,2,-r*0.55,0xf47fa7,1.4); line(2,-r*0.55,4,-r*0.45,0xf47fa7,1); line(-2,3,-2,6,0xf47fa7,1); line(1,3,1,6,0xf47fa7,1); break;
+      case 'windUpMouse': g.fillStyle(0xb7c4cb,1).fillEllipse(0,0,r*0.85,r*0.65); eye(-2,-1); eye(2,-1); line(0,3,3,4,0xe899a5,0.8); line(-r*0.4,2,-r*0.75,4,0xd6a6a5,0.7); break;
+      case 'rcDrone': line(-r*0.55,-2,r*0.55,-2,0x263846,1.2); line(0,-2,0,3,0x263846,1.2); dot(-r*0.55,-2,1,0x71e6ff); dot(r*0.55,-2,1,0x71e6ff); dot(0,2,2,0x72c9eb); break;
+      case 'sizzlingMarble': g.fillStyle(0xffb848,1).fillCircle(0,0,r*0.7); g.lineStyle(1.3,0xff4b35,0.95).strokeCircle(0,0,r*0.45); dot(-1,-2,0.8,0xffffb2); break;
+      case 'anvilWeight': g.fillStyle(0x626d78,1).fillRoundedRect(-r*0.5,-r*0.45,r,r*0.8,2); line(-r*0.3,-r*0.25,r*0.3,-r*0.25,0xcbd4dc,1); line(-3,0,3,0,0xcbd4dc,0.8); break;
+      case 'stuffedTeddy': g.fillStyle(0xb77a65,1).fillCircle(0,0,r*0.55); dot(-r*0.36,-r*0.35,r*0.2,0xb77a65); dot(r*0.36,-r*0.35,r*0.2,0xb77a65); eye(-2,0); eye(2,0); line(-1,3,1,3,light,0.7); break;
+      case 'castIronSkillet': g.fillStyle(0x4f5c64,1).fillEllipse(-1,0,r*0.7,r*0.65); line(r*0.35,0,r*0.78,2,0x252d34,2); dot(-2,-2,0.5,0xb9c3c8); break;
+      case 'magnetBot': line(-r*0.42,-r*0.42,-r*0.42,r*0.35,0xe75d5d,2); line(-r*0.42,r*0.35,r*0.42,r*0.35,0x6c8ef0,2); line(r*0.42,r*0.35,r*0.42,-r*0.42,0x6c8ef0,2); dot(0,0,1,0xd8ffff); break;
+      case 'bubbleWrap': g.lineStyle(1,0xd5ffff,0.8).strokeCircle(-3,-2,2).strokeCircle(2,-3,2).strokeCircle(0,2,2).strokeCircle(4,1,1.5); break;
+      case 'jackInBox': g.lineStyle(1,0x824046,1).strokeRect(-r*0.55,0,r*1.1,r*0.55); g.lineStyle(1,0xffd15e,1).strokeRect(-r*0.55,-r*0.5,r*1.1,r*0.5); eye(-2,-2); eye(2,-2); line(0,-r*0.5,0,-r*0.8,0xf5d15e,1); break;
+      case 'mirrorShard': g.fillStyle(0xb9efff,0.85).fillTriangle(0,-r*0.65,r*0.55,r*0.4,-r*0.45,r*0.25); line(-2,-2,2,2,0xffffff,0.8); break;
+      case 'oilCan': g.fillStyle(0x423d32,1).fillRoundedRect(-r*0.42,-r*0.3,r*0.75,r*0.65,2); line(r*0.25,-2,r*0.55,-r*0.4,0xc9a742,1); dot(-1,0,1,0xd0a848); break;
+      case 'batteryPack': g.fillStyle(0xf0c947,1).fillRoundedRect(-r*0.45,-r*0.4,r*0.9,r*0.8,2); line(-1,-2,1,-2,0x342c18,1); line(0,-3,0,-1,0x342c18,1); line(0,0,-2,2,0x342c18,1); line(-2,2,1,2,0x342c18,1); line(1,2,0,4,0x342c18,1); break;
+      case 'lawnMowerMini': line(-r*0.45,0,r*0.45,0,0xe8c94e,2); line(-r*0.35,-r*0.2,-r*0.12,-r*0.55,0x273b2a,1.6); dot(-r*0.3,r*0.35,1,0x242b30); dot(r*0.3,r*0.35,1,0x242b30); eye(0,-2); break;
+      case 'microwaveMini': g.fillStyle(0x67727c,1).fillRoundedRect(-r*0.55,-r*0.45,r*1.1,r*0.9,2); g.lineStyle(1,0x9bf1ff,0.9).strokeRect(-r*0.36,-r*0.25,r*0.55,r*0.5); dot(r*0.32,-2,0.7,0xf6d45d); dot(r*0.32,2,0.7,0xf6d45d); break;
+      case 'toyTrain': g.fillStyle(0x397fb1,1).fillRoundedRect(-r*0.5,-r*0.25,r,r*0.6,2); g.fillStyle(0xe8d66f,1).fillRect(-r*0.25,-r*0.55,r*0.4,r*0.3); dot(-r*0.28,r*0.35,1,0x222b34); dot(r*0.28,r*0.35,1,0x222b34); line(r*0.45,0,r*0.65,0,0xe7d283,1); break;
+      case 'vacuumMini': g.fillStyle(0x7662a8,1).fillCircle(-1,0,r*0.5); line(r*0.2,0,r*0.62,-1,0xdee9f5,1.2); dot(-2,-1,0.8,0xbbeeff); break;
+      case 'grandfatherClockBoss': g.lineStyle(1.3,0x533b27,1).strokeRoundedRect(-r*0.38,-r*0.62,r*0.76,r*1.2,2); g.lineStyle(1,0xf3d17a,1).strokeCircle(0,-r*0.15,r*0.23); line(0,-r*0.15,2,-r*0.27,0xf8e3aa,0.8); line(0,-r*0.15,-2,-r*0.06,0xf8e3aa,0.8); break;
+      case 'garbageCompactor': g.fillStyle(0x617468,1).fillRoundedRect(-r*0.55,-r*0.4,r*1.1,r*0.8,2); line(-r*0.35,-r*0.2,r*0.35,-r*0.2,0xe2edcc,1); line(-r*0.35,0,r*0.35,0,0xe2edcc,1); line(-r*0.35,r*0.2,r*0.35,r*0.2,0xe2edcc,1); break;
+      case 'arcadeCabinet': g.fillStyle(0x703f94,1).fillRoundedRect(-r*0.42,-r*0.55,r*0.84,r*1.1,2); g.fillStyle(0x62ecff,1).fillRect(-r*0.27,-r*0.36,r*0.54,r*0.4); dot(-2,r*0.23,0.75,0xffda5c); dot(2,r*0.23,0.75,0xff628f); break;
       case 'doomsdayClockworkGoliath':
         g.lineStyle(Math.max(2, r * 0.14), 0x70471e, 1).strokeCircle(0, 0, r * 0.9);
         for (let tooth = 0; tooth < 12; tooth += 1) { const angle = tooth * Math.PI / 6; line(Math.cos(angle) * r * 0.78, Math.sin(angle) * r * 0.78, Math.cos(angle) * r * 1.02, Math.sin(angle) * r * 1.02, 0xf0bf52, Math.max(1.5, r * 0.12)); }
@@ -5201,7 +5937,10 @@ export class GameScene extends Phaser.Scene {
     this.upgradeDenyLabel?.setY(buttonY);
     this.upgradeConfirmButton?.setY(buttonY);
     this.upgradeConfirmLabel?.setY(buttonY);
-    this.priorityButtonLabel?.setText(`${(this.selectedTower?.priority ?? this.defaultPriority).toUpperCase()}   ▾`);
+    if (this.selectedTower?.spec.id === 'deskFan') {
+      const compass = ['EAST', 'SOUTHEAST', 'SOUTH', 'SOUTHWEST', 'WEST', 'NORTHWEST', 'NORTH', 'NORTHEAST'];
+      this.priorityButtonLabel?.setText(`FAN AIM · ${compass[Math.round(this.selectedTower.aimAngle / (Math.PI / 4)) % 8]}  ↻`);
+    } else this.priorityButtonLabel?.setText(`${(this.selectedTower?.priority ?? this.defaultPriority).toUpperCase()}   ▾`);
     const canSkip = this.canSkipWave();
     this.skipButton?.setFillStyle(canSkip ? 0x2d4b58 : 0x182733);
     this.skipButton?.setStrokeStyle(1, canSkip ? COLORS.mint : 0x607c82);

@@ -1,5 +1,9 @@
 export type EnemyAbility = 'piñata' | 'nestingDoll' | 'teeth' | 'bubbleBath' | 'alarm' | 'tapeRoller'
-  | 'lawnMower' | 'overlordFridge' | 'piggyBank' | 'cosmicVacuum' | 'doomsdayClockworkGoliath' | 'abyssalJunkHydra';
+  | 'lawnMower' | 'overlordFridge' | 'piggyBank' | 'cosmicVacuum' | 'doomsdayClockworkGoliath' | 'abyssalJunkHydra'
+  | 'dustyCushion' | 'cardboardBox' | 'plasticFlamingo' | 'windUpMouse' | 'rcDrone' | 'sizzlingMarble'
+  | 'anvilWeight' | 'stuffedTeddy' | 'castIronSkillet' | 'magnetBot' | 'bubbleWrap' | 'jackInBox'
+  | 'mirrorShard' | 'oilCan' | 'batteryPack' | 'lawnMowerMini' | 'microwaveMini' | 'toyTrain'
+  | 'vacuumMini' | 'grandfatherClockBoss' | 'garbageCompactor' | 'arcadeCabinet' | 'coinGeist';
 
 export interface EnemySpec {
   id: string;
@@ -15,6 +19,7 @@ export interface EnemySpec {
   miniboss?: boolean;
   boss?: boolean;
   ability?: EnemyAbility;
+  description?: string;
 }
 
 export const ENEMIES: Record<string, EnemySpec> = {
@@ -43,6 +48,29 @@ export const ENEMIES: Record<string, EnemySpec> = {
   bubbleBath: { id: 'bubbleBath', name: 'The Overflowing Bubble Bath', shortName: 'Bubble Bath', hp: 420, speed: 1, armor: -3, hyperarmor: 25, leak: 18, bounty: 30, color: 0x86d9e2, ability: 'bubbleBath' },
   alarm: { id: 'alarm', name: 'The Alarm Clock Parade', shortName: 'Alarm Parade', hp: 300, speed: 0.75, armor: 3, hyperarmor: 10, leak: 15, bounty: 28, color: 0xe88c59, ability: 'alarm' },
   tape: { id: 'tape', name: 'The Sticky Tape Roller', shortName: 'Tape Roller', hp: 550, speed: 0.75, armor: 5, hyperarmor: 20, leak: 25, bounty: 45, color: 0xf0ce48, ability: 'tapeRoller' },
+  dustyCushion: { id: 'dustyCushion', name: 'Dusty Cushion', shortName: 'Dusty Cushion', hp: 40, speed: 1, armor: 0, hyperarmor: 0, leak: 1, bounty: 8, color: 0xb6a38e, ability: 'dustyCushion', description: 'Puffs dust on defeat, briefly blinding nearby towers.' },
+  cardboardBox: { id: 'cardboardBox', name: 'Cardboard Box', shortName: 'Cardboard Box', hp: 65, speed: 0.8, armor: 2, hyperarmor: 5, leak: 1, bounty: 10, color: 0xc99d68, ability: 'cardboardBox', description: 'Armored cardboard resists physical hits until it is worn down.' },
+  plasticFlamingo: { id: 'plasticFlamingo', name: 'Plastic Flamingo', shortName: 'Flamingo', hp: 50, speed: 1.1, armor: 0, hyperarmor: 0, leak: 1, bounty: 9, color: 0xf27da9, ability: 'plasticFlamingo', description: 'A lawn ornament that hops steadily along the road.' },
+  windUpMouse: { id: 'windUpMouse', name: 'Wind-Up Mouse', shortName: 'Wind-Up Mouse', hp: 25, speed: 2.2, armor: 0, hyperarmor: 0, leak: 1, bounty: 12, color: 0xa6cdd2, ability: 'windUpMouse', description: 'Zips forward in erratic bursts.' },
+  rcDrone: { id: 'rcDrone', name: 'RC Drone', shortName: 'RC Drone', hp: 35, speed: 2, armor: 0, hyperarmor: 0, leak: 1, bounty: 14, color: 0x76d5ef, ability: 'rcDrone', description: 'Flying unit that ignores floor traps.' },
+  sizzlingMarble: { id: 'sizzlingMarble', name: 'Sizzling Marble', shortName: 'Sizzling Marble', hp: 30, speed: 2.4, armor: 1, hyperarmor: 0, leak: 1, bounty: 15, color: 0xff8b55, ability: 'sizzlingMarble', description: 'A hot marble that slows as its health drops.' },
+  anvilWeight: { id: 'anvilWeight', name: 'Anvil Weight', shortName: 'Anvil Weight', hp: 350, speed: 0.5, armor: 12, hyperarmor: 30, leak: 4, bounty: 35, color: 0x737d87, ability: 'anvilWeight', description: 'Dense iron absorbs physical punishment.' },
+  stuffedTeddy: { id: 'stuffedTeddy', name: 'Stuffed Teddy Bear', shortName: 'Stuffed Teddy', hp: 450, speed: 0.6, armor: 0, hyperarmor: 15, leak: 3, bounty: 40, color: 0xb77a65, ability: 'stuffedTeddy', description: 'Its stuffing reduces explosive damage.' },
+  castIronSkillet: { id: 'castIronSkillet', name: 'Cast Iron Skillet', shortName: 'Cast Iron', hp: 280, speed: 0.7, armor: 8, hyperarmor: 20, leak: 3, bounty: 30, color: 0x596872, ability: 'castIronSkillet', description: 'Deflects physical attacks from its front.' },
+  magnetBot: { id: 'magnetBot', name: 'Magnet Bot', shortName: 'Magnet Bot', hp: 180, speed: 0.9, armor: 4, hyperarmor: 10, leak: 2, bounty: 25, color: 0x6eb5bd, ability: 'magnetBot', description: 'Attracts nearby metal shots and absorbs them.' },
+  bubbleWrap: { id: 'bubbleWrap', name: 'Bubble Wrap Roll', shortName: 'Bubble Wrap', hp: 120, speed: 1, armor: 0, hyperarmor: 0, leak: 2, bounty: 22, color: 0x8de7e7, ability: 'bubbleWrap', description: 'Five bubble layers each cancel one hit.' },
+  jackInBox: { id: 'jackInBox', name: 'Jack-in-the-Box', shortName: 'Jack-in-the-Box', hp: 200, speed: 0.75, armor: 2, hyperarmor: 10, leak: 3, bounty: 28, color: 0xe7686d, ability: 'jackInBox', description: 'Jumps forward every five seconds.' },
+  mirrorShard: { id: 'mirrorShard', name: 'Mirror Shard', shortName: 'Mirror Shard', hp: 110, speed: 1.2, armor: 0, hyperarmor: 0, leak: 2, bounty: 24, color: 0xb0e9ef, ability: 'mirrorShard', description: 'Reflects some beam damage as attack-speed interference.' },
+  oilCan: { id: 'oilCan', name: 'Spilled Oil Can', shortName: 'Oil Can', hp: 160, speed: 0.85, armor: 0, hyperarmor: 5, leak: 2, bounty: 26, color: 0x3c3b32, ability: 'oilCan', description: 'Leaves oil that speeds up following enemies.' },
+  batteryPack: { id: 'batteryPack', name: 'Battery Pack', shortName: 'Battery Pack', hp: 220, speed: 0.8, armor: 3, hyperarmor: 15, leak: 3, bounty: 30, color: 0xffd44f, ability: 'batteryPack', description: 'Disables the nearest tower when defeated.' },
+  lawnMowerMini: { id: 'lawnMowerMini', name: 'The Lawn Mower', shortName: 'Lawn Mower', hp: 2500, speed: 0.65, armor: 10, hyperarmor: 25, leak: 10, bounty: 250, color: 0xe45449, miniboss: true, ability: 'lawnMowerMini', description: 'Destroys track traps and obscures nearby targeting.' },
+  microwaveMini: { id: 'microwaveMini', name: 'Microwave Oven', shortName: 'Microwave Oven', hp: 3000, speed: 0.5, armor: 15, hyperarmor: 20, leak: 15, bounty: 300, color: 0x858c98, miniboss: true, ability: 'microwaveMini', description: 'Heat aura blocks nearby slows and freezes; releases marbles at half health.' },
+  toyTrain: { id: 'toyTrain', name: 'Toy Train Engine', shortName: 'Toy Train', hp: 2200, speed: 0.9, armor: 6, hyperarmor: 15, leak: 12, bounty: 220, color: 0x55a8d7, miniboss: true, ability: 'toyTrain', description: 'Pulls cardboard cars and stuns towers on arrival.' },
+  vacuumMini: { id: 'vacuumMini', name: 'Vacuum Cleaner', shortName: 'Vacuum Cleaner', hp: 3500, speed: 0.45, armor: 8, hyperarmor: 30, leak: 20, bounty: 350, color: 0x9478c6, miniboss: true, ability: 'vacuumMini', description: 'Sucks up light projectiles and releases cushions when defeated.' },
+  grandfatherClockBoss: { id: 'grandfatherClockBoss', name: 'Grandfather Clock', shortName: 'Grandfather Clock', hp: 12000, speed: 0.4, armor: 18, hyperarmor: 35, leak: 50, bounty: 1200, color: 0x9b744a, boss: true, ability: 'grandfatherClockBoss', description: 'Reverses tower targeting and disables nearby support auras.' },
+  garbageCompactor: { id: 'garbageCompactor', name: 'Garbage Compactor', shortName: 'Garbage Compactor', hp: 16000, speed: 0.35, armor: 25, hyperarmor: 45, leak: 100, bounty: 1500, color: 0x657764, boss: true, ability: 'garbageCompactor', description: 'Blocks frontal shots and turns defeated enemies into moving shields.' },
+  arcadeCabinet: { id: 'arcadeCabinet', name: 'Arcade Cabinet', shortName: 'Arcade Cabinet', hp: 14000, speed: 0.45, armor: 12, hyperarmor: 40, leak: 75, bounty: 1350, color: 0xb753d8, boss: true, ability: 'arcadeCabinet', description: 'Glitches forward and disrupts target markers at low health.' },
+  coinGeist: { id: 'coinGeist', name: 'Coin-Geist', shortName: 'Coin-Geist', hp: 1, speed: 4, armor: 0, hyperarmor: 0, leak: 1, bounty: 0, color: 0xffd15e, ability: 'coinGeist', description: 'Golden Curse phantom: fast, fragile, and leaks one base HP.' },
 };
 
 export type EnemyKey = keyof typeof ENEMIES;

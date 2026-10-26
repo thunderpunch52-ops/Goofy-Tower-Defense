@@ -1,7 +1,7 @@
 import { type EnemyKey, type EnemySpec, type WaveGroup } from './content';
 
 export type EndlessThreat = 'Basic' | 'Fast' | 'Heavy' | 'Unique' | 'Mini-Boss' | 'Boss';
-export type EndlessEliteId = 'midas' | 'hermes' | 'iron' | 'phantom' | 'siphon' | 'brute' | 'nullField' | 'splitEcho';
+export type EndlessEliteId = 'midas' | 'hermes' | 'iron' | 'phantom' | 'siphon' | 'brute' | 'nullField' | 'splitEcho' | 'frostTempered' | 'voidBound';
 export const ENDLESS_MEGA_BOSS_COST = 800;
 
 export interface EndlessEliteSpec {
@@ -21,6 +21,8 @@ export const ENDLESS_ELITES: EndlessEliteSpec[] = [
   { id: 'brute', name: 'Blood-Pact Brute', color: 0xf04452, points: 110, description: '+50% HP; each 25% HP lost adds speed and leak damage.' },
   { id: 'nullField', name: 'Null-Field Conduit', color: 0xeaff28, points: 100, description: '+10 Hyperarmor; immune to stun, freeze, and knockback.' },
   { id: 'splitEcho', name: 'Split-Echo Entity', color: 0x22e58e, points: 130, description: '+75% HP; below half HP spawns a 1-HP echo.' },
+  { id: 'frostTempered', name: 'Frost-Tempered', color: 0x145bd7, points: 85, description: '+40% HP, +10 Armor; immune to chill and freeze; slows nearby towers on defeat.' },
+  { id: 'voidBound', name: 'Void-Bound', color: 0x551780, points: 105, description: '+30% HP, +50% speed; absorbs half of splash damage and heals nearby non-elites.' },
 ];
 
 export function endlessEliteSpec(id: EndlessEliteId): EndlessEliteSpec {
@@ -44,9 +46,10 @@ export function endlessEliteStats(base: Pick<EnemySpec, 'armor' | 'hyperarmor'>,
   const count = (id: EndlessEliteId) => ids.filter((elite) => elite === id).length;
   return {
     hpMultiplier: 1.5 ** count('midas') * 0.75 ** count('hermes') * 2 ** count('iron')
-      * 1.25 ** count('siphon') * 1.5 ** count('brute') * 1.75 ** count('splitEcho'),
-    speedMultiplier: 2 ** count('hermes'),
-    armor: base.armor * 1.25 ** count('midas') + 5 * count('iron'),
+      * 1.25 ** count('siphon') * 1.5 ** count('brute') * 1.75 ** count('splitEcho')
+      * 1.4 ** count('frostTempered') * 1.3 ** count('voidBound'),
+    speedMultiplier: 2 ** count('hermes') * 1.5 ** count('voidBound'),
+    armor: base.armor * 1.25 ** count('midas') + 5 * count('iron') + 10 * count('frostTempered'),
     hyperarmor: base.hyperarmor + 20 * count('iron') + 10 * count('nullField'),
     bountyMultiplier: 3 ** count('midas'),
   };
@@ -89,12 +92,12 @@ export function endlessEnemyPointCost(enemy: EnemyKey): number {
 }
 
 const ENEMY_POINTS: Record<EndlessThreat, { points: number; enemies: EnemyKey[] }> = {
-  Basic: { points: 5, enemies: ['sock', 'donut', 'box', 'bowling'] },
-  Fast: { points: 10, enemies: ['scooter', 'ferret'] },
-  Heavy: { points: 20, enemies: ['shoppingCart', 'recliner', 'brickSafe'] },
-  Unique: { points: 15, enemies: ['teeth', 'alarm', 'pinata', 'nestingDoll', 'bubbleBath', 'tape'] },
-  'Mini-Boss': { points: 100, enemies: ['vending', 'dumpster', 'paradeBalloon'] },
-  Boss: { points: 300, enemies: ['lawnMower', 'overlordFridge', 'piggyBank', 'cosmicVacuum'] },
+  Basic: { points: 5, enemies: ['sock', 'donut', 'box', 'bowling', 'dustyCushion', 'cardboardBox', 'plasticFlamingo'] },
+  Fast: { points: 10, enemies: ['scooter', 'ferret', 'windUpMouse', 'rcDrone', 'sizzlingMarble'] },
+  Heavy: { points: 20, enemies: ['shoppingCart', 'recliner', 'brickSafe', 'anvilWeight', 'stuffedTeddy', 'castIronSkillet'] },
+  Unique: { points: 15, enemies: ['teeth', 'alarm', 'pinata', 'nestingDoll', 'bubbleBath', 'tape', 'magnetBot', 'bubbleWrap', 'jackInBox', 'mirrorShard', 'oilCan', 'batteryPack'] },
+  'Mini-Boss': { points: 100, enemies: ['vending', 'dumpster', 'paradeBalloon', 'lawnMowerMini', 'microwaveMini', 'toyTrain', 'vacuumMini'] },
+  Boss: { points: 300, enemies: ['lawnMower', 'overlordFridge', 'piggyBank', 'cosmicVacuum', 'grandfatherClockBoss', 'garbageCompactor', 'arcadeCabinet'] },
 };
 
 export function endlessThreatForEnemy(key: EnemyKey): EndlessThreat {
