@@ -263,6 +263,9 @@ export class GameScene extends Phaser.Scene {
   private towerGridClose?: Phaser.GameObjects.Rectangle;
   private towerGridCloseLabel?: Phaser.GameObjects.Text;
   private towerGridHint?: Phaser.GameObjects.Text;
+  private towerGridScrollbarTrack?: Phaser.GameObjects.Rectangle;
+  private towerGridScrollbarThumb?: Phaser.GameObjects.Rectangle;
+  private towerGridScrollOffset = 0;
   private towerGridCards: Array<{ button: Phaser.GameObjects.Rectangle; icon: Phaser.GameObjects.Arc; title: Phaser.GameObjects.Text; meta: Phaser.GameObjects.Text; lock: Phaser.GameObjects.Graphics; lockText: Phaser.GameObjects.Text }> = [];
   private upgradeConfirmButton?: Phaser.GameObjects.Rectangle;
   private upgradeConfirmLabel?: Phaser.GameObjects.Text;
@@ -420,6 +423,9 @@ export class GameScene extends Phaser.Scene {
     this.towerGridClose = undefined;
     this.towerGridCloseLabel = undefined;
     this.towerGridHint = undefined;
+    this.towerGridScrollbarTrack = undefined;
+    this.towerGridScrollbarThumb = undefined;
+    this.towerGridScrollOffset = 0;
     this.mysteryBoxButton = undefined;
     this.mysteryBoxTitle = undefined;
     this.mysteryBoxMeta = undefined;
@@ -772,6 +778,10 @@ export class GameScene extends Phaser.Scene {
     maskShape.fillStyle(0xffffff).fillRect(398, 82, 484, 550);
     this.boardLayer.setMask(maskShape.createGeometryMask());
     this.input.on('wheel', (pointer: Phaser.Input.Pointer, _objects: Phaser.GameObjects.GameObject[], _dx: number, dy: number) => {
+      if (this.towerGridOverlay?.visible && pointer.x >= 398 && pointer.x <= 882 && pointer.y >= 82 && pointer.y <= 680) {
+        this.scrollTowerGrid(dy);
+        return;
+      }
       if (pointer.x >= 398 && pointer.x <= 882 && pointer.y >= 82 && pointer.y <= 632) {
         this.setBoardZoom(this.boardZoom + (dy < 0 ? 0.1 : -0.1), pointer.x, pointer.y);
       }
@@ -1267,6 +1277,10 @@ export class GameScene extends Phaser.Scene {
     this.towerGridCloseLabel = this.add.text(856, 106, '×', { fontFamily: 'Arial', fontSize: '20px', color: '#f6f1df', fontStyle: 'bold' }).setOrigin(0.5).setDepth(33).setVisible(false);
     this.towerGridClose.on('pointerdown', () => this.setTowerGridOpen(false));
     this.towerGridCloseLabel.setInteractive({ useHandCursor: true }).on('pointerdown', () => this.setTowerGridOpen(false));
+    this.towerGridScrollbarTrack = this.add.rectangle(870, 391, 8, 466, 0x243945, 0.95)
+      .setStrokeStyle(1, 0x526c75).setDepth(32).setVisible(false);
+    this.towerGridScrollbarThumb = this.add.rectangle(870, 158, 8, 70, 0x63dcff, 1)
+      .setDepth(33).setVisible(false);
     this.towerGridHint = this.add.text(640, 651, 'Choose an unlocked tower · locked towers show their unlock requirement', {
       fontFamily: 'Arial', fontSize: '10px', color: '#b8c6ff', align: 'center', wordWrap: { width: 430 },
     }).setOrigin(0.5).setDepth(34).setVisible(false);
@@ -1379,6 +1393,7 @@ export class GameScene extends Phaser.Scene {
     this.towerGridClose?.setVisible(open);
     this.towerGridCloseLabel?.setVisible(open);
     this.towerGridHint?.setVisible(open);
+    this.towerGridScrollOffset = open ? 0 : this.towerGridScrollOffset;
     const showMystery = open && this.isMysteryOnlyRun();
     this.mysteryBoxButton?.setVisible(showMystery);
     this.mysteryBoxTitle?.setVisible(showMystery);
@@ -1388,31 +1403,73 @@ export class GameScene extends Phaser.Scene {
     this.mysteryBoxMeta?.setText(this.mysteryTowerOffer ? `${this.mysteryTowerCost ? `$${this.mysteryTowerCost} · ` : 'FREE · '}CLICK TO ${this.mysteryTowerCost ? 'BUY' : 'PLACE'}` : stageFourFreeAvailable ? 'FREE · LOW/MID ATTACK TOWER' : 'REVEALS RARITY · CLICK');
     this.mysteryBoxButton?.setInteractive({ useHandCursor: true }).setAlpha(1);
     const mysteryOnly = this.isMysteryOnlyRun();
+    if (open) this.towerGridHint?.setText(mysteryOnly ? 'Mystery mode · only the mystery tower is available. Cancel before placement for a full refund.' : this.draftMode !== 'none' ? 'Draft roster only · these tower types stay available for the whole run.' : 'Choose an unlocked tower · locked towers show their unlock requirement');
+    this.layoutTowerGrid(open && !showMystery);
+    this.updateHUD();
+  }
+
+  private scrollTowerGrid(deltaY: number): void {
+    if (!deltaY || !this.towerGridOverlay?.visible || this.isMysteryOnlyRun()) return;
+    this.towerGridScrollOffset = Math.max(0, this.towerGridScrollOffset + (deltaY > 0 ? 1 : -1));
+    this.layoutTowerGrid(true);
+  }
+
+  private layoutTowerGrid(open: boolean): void {
+    const eligible = ROSTER_TOWERS.map((spec, index) => ({ spec, index }))
+      .filter(({ spec }) => this.draftMode === 'none' || this.draftRoster.includes(spec.id));
+    const columns = 3;
+    const visibleRows = 7;
+    const maxOffset = Math.max(0, Math.ceil(eligible.length / columns) - visibleRows);
+    this.towerGridScrollOffset = Phaser.Math.Clamp(this.towerGridScrollOffset, 0, maxOffset);
+    const start = this.towerGridScrollOffset * columns;
+    const end = start + columns * visibleRows;
+    const hasMore = maxOffset > 0;
+
     for (const [index, card] of this.towerGridCards.entries()) {
-      const spec = ROSTER_TOWERS[index]!;
-      const drafted = this.draftMode !== 'none' && this.draftRoster.includes(spec.id);
-      const locked = this.draftMode === 'none' && !this.towerUnlockState(spec).unlocked;
-      const visible = open && !mysteryOnly && (this.draftMode === 'none' || drafted);
+      const slot = eligible.findIndex((entry) => entry.index === index);
+      const visible = open && slot >= start && slot < end;
       card.button.setVisible(visible);
       card.icon.setVisible(visible);
       card.title.setVisible(visible);
       card.meta.setVisible(visible);
-      card.lock.setVisible(visible && locked);
-      card.lockText.setVisible(visible && locked);
       card.lock.clear();
-      if (open && locked) {
-        const col = index % 3;
-        const row = Math.floor(index / 3);
-        const x = 487 + col * 151;
-        const y = 158 + row * 73;
+      card.lockText.setVisible(false);
+      if (!visible) {
+        card.lock.setVisible(false);
+        continue;
+      }
+      const { spec } = eligible[slot]!;
+      const shownIndex = slot - start;
+      const col = shownIndex % columns;
+      const row = Math.floor(shownIndex / columns);
+      const x = 487 + col * 151;
+      const y = 158 + row * 73;
+      card.button.setPosition(x, y);
+      card.icon.setPosition(x - 57, y - 14);
+      card.title.setPosition(x + 3, y - 16);
+      card.meta.setPosition(x, y + 15);
+      const locked = this.draftMode === 'none' && !this.towerUnlockState(spec).unlocked;
+      card.lock.setVisible(locked);
+      card.lockText.setVisible(locked).setPosition(x, y + 1);
+      if (locked) {
         card.lock.fillStyle(0x101820, 0.68).fillRoundedRect(x - 71, y - 33, 142, 65, 8);
         card.lock.lineStyle(2, 0xef7e9c, 0.95).strokeRoundedRect(x - 71, y - 33, 142, 65, 8);
         card.lock.lineStyle(2.4, 0xfff1f4, 1).strokeCircle(x, y - 3, 7);
         card.lock.fillStyle(0xfff1f4, 1).fillRoundedRect(x - 8, y - 3, 16, 13, 2);
       }
     }
-    if (open) this.towerGridHint?.setText(mysteryOnly ? 'Mystery mode · only the mystery tower is available. Cancel before placement for a full refund.' : this.draftMode !== 'none' ? 'Draft roster only · these tower types stay available for the whole run.' : 'Choose an unlocked tower · locked towers show their unlock requirement');
-    this.updateHUD();
+
+    this.towerGridScrollbarTrack?.setVisible(open && hasMore);
+    this.towerGridScrollbarThumb?.setVisible(open && hasMore);
+    if (hasMore) {
+      const trackTop = 158;
+      const trackHeight = 466;
+      const thumbHeight = Math.max(48, trackHeight * visibleRows / (Math.ceil(eligible.length / columns) * 73));
+      const thumbTravel = trackHeight - thumbHeight;
+      const progress = maxOffset ? this.towerGridScrollOffset / maxOffset : 0;
+      this.towerGridScrollbarThumb?.setSize(8, thumbHeight).setPosition(870, trackTop + thumbHeight / 2 + progress * thumbTravel);
+    }
+    if (open && hasMore) this.towerGridHint?.setText(`Scroll to browse towers · ${this.towerGridScrollOffset + 1}/${maxOffset + 1}`);
   }
 
   private step(dt: number): void {
