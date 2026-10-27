@@ -387,6 +387,10 @@ export class GameScene extends Phaser.Scene {
     this.selectedEnemy = undefined;
     this.selectedSummon = undefined;
     this.paused = false;
+    // The scene instance is reused when continuing to the next Odyssey node.
+    // Clear the rest-stop gate here so the new node's countdown can advance.
+    this.odysseyRestOpen = false;
+    this.odysseyOverlayObjects.length = 0;
     this.speed = 1;
     this.countdown = 3;
     this.betweenWaveTimer = 0;
