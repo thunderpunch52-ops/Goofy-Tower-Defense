@@ -387,6 +387,7 @@ export class GameScene extends Phaser.Scene {
     this.selectedEnemy = undefined;
     this.selectedSummon = undefined;
     this.paused = false;
+    this.draftChoiceOpen = false;
     // The scene instance is reused when continuing to the next Odyssey node.
     // Clear the rest-stop gate here so the new node's countdown can advance.
     this.odysseyRestOpen = false;
@@ -5060,10 +5061,17 @@ export class GameScene extends Phaser.Scene {
     const continueY = branchNode ? 600 : 520;
     const continueButton = add(this.add.rectangle(520, continueY, 250, 42, 0x315b60).setStrokeStyle(1, 0x75efc1).setInteractive({ useHandCursor: true }));
     const continueText = add(this.add.text(520, continueY, 'CONTINUE EXPEDITION', { fontFamily: 'Arial', fontSize: '12px', color: '#fff5d7', fontStyle: 'bold' }).setOrigin(0.5).setInteractive({ useHandCursor: true }));
+    let continuing = false;
     const continueRun = () => {
+      if (continuing) return;
       if (branchNode && !next.branchMutationId) { feedback.setText('Choose Route A or B before continuing.'); return; }
+      continuing = true;
       state.nodeIndex += 1; state.baseHealth = this.baseHealth; state.carryCoins = Math.min(1500, Math.floor(this.coins * 0.5 * (this.mutationStack('resourceScarcity') ? 0.4 : 1)));
-      this.registry.set('odysseyState', state); this.registry.set('selectedMapId', state.nodes[state.nodeIndex]!.mapId); this.scene.restart();
+      this.registry.set('odysseyState', state); this.registry.set('selectedMapId', state.nodes[state.nodeIndex]!.mapId);
+      // Close the rest-stop gate before restarting. The next node begins with
+      // its own countdown and must not inherit this modal's paused state.
+      this.clearOdysseyOverlay();
+      this.scene.restart();
     };
     continueButton.on('pointerdown', continueRun); continueText.on('pointerdown', continueRun);
     const extract = add(this.add.rectangle(800, continueY, 250, 42, 0x62404b).setStrokeStyle(1, 0xef7e9c).setInteractive({ useHandCursor: true }));
