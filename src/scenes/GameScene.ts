@@ -23,7 +23,7 @@ interface PlacedTower {
   tile: Tile; spec: TowerSpec; sprite: Phaser.GameObjects.Rectangle; art: Phaser.GameObjects.Graphics; label: Phaser.GameObjects.Text; spentCoins: number;
   lastTargetId?: number; cooldown: number; priority: Priority; aimAngle: number; chosenPath?: number;
   ranks: [number, number, number]; totalUpgrades: number; beamLockTime: number;
-  damageMultiplier: number; damageAuraMultiplier: number; rangeMultiplier: number; attackSpeedMultiplier: number; baseAttackSpeedMultiplier: number;
+  damageMultiplier: number; damageAuraMultiplier: number; permanentDamageMultiplier: number; rangeMultiplier: number; attackSpeedMultiplier: number; baseAttackSpeedMultiplier: number;
   blastMultiplier: number; slowBonus: number; slowDurationMultiplier: number; pushBonus: number;
   stunChance: number; supportPowerMultiplier: number; pigeonAuraBonus: number; coinBonusOnStick: number;
   burnDpsBonus: number; passiveSlow: number; auraSlow: number; nearbyFireRateBonus: number; trackingMultiplier: number;
@@ -3061,7 +3061,7 @@ export class GameScene extends Phaser.Scene {
       }
       tower.attackSpeedMultiplier = tower.baseAttackSpeedMultiplier;
       tower.pigeonRangeAuraMultiplier = 1;
-      tower.damageAuraMultiplier = 1;
+      tower.damageAuraMultiplier = tower.permanentDamageMultiplier;
       const disabled = tower.disabledUntil > this.simTime || this.towerStunUntil > this.simTime;
       const siphoned = tower.siphonSlowUntil > this.simTime;
       tower.sprite.setAlpha(disabled ? 0.38 : siphoned ? 0.75 : 1);
@@ -3498,20 +3498,25 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     if (tower.spec.attackType === 'claw') {
+      // Grab effects can kill their target. Cache the impact position before
+      // applying damage so the animation never reads a destroyed sprite.
+      const hitX = target.sprite.x;
+      const hitY = target.sprite.y;
       this.damageEnemy(target, tower, damage * (tower.ranks[0]! >= 4 ? 2 : 1), true);
-      if (tower.ranks[0]! >= 3 && !target.spec.boss && !target.spec.miniboss) this.applyPushback(target, 5);
-      else if (tower.ranks[0]! >= 5 && target.spec.miniboss && !target.spec.boss) target.pathProgress = Math.max(0, target.pathProgress - 2);
+      if (target.alive && tower.ranks[0]! >= 3 && !target.spec.boss && !target.spec.miniboss) this.applyPushback(target, 5);
+      else if (target.alive && tower.ranks[0]! >= 5 && target.spec.miniboss && !target.spec.boss) target.pathProgress = Math.max(0, target.pathProgress - 2);
       if (tower.ranks[0]! >= 4) {
-        const impact = this.addToBoard(this.add.circle(target.sprite.x, target.sprite.y, 3, 0xffd15e, 0.2).setStrokeStyle(2, 0xffd15e, 0.95).setDepth(7));
+        const impact = this.addToBoard(this.add.circle(hitX, hitY, 3, 0xffd15e, 0.2).setStrokeStyle(2, 0xffd15e, 0.95).setDepth(7));
         this.tweens.add({ targets: impact, radius: BOARD.cell * 1.1, alpha: 0, duration: 260, onComplete: () => impact.destroy() });
         for (const adjacent of candidates) if (adjacent !== target && adjacent.route === target.route && Math.abs(adjacent.pathProgress - attackProgress) <= 1) {
-          this.damageEnemy(adjacent, tower, damage * 2, false); this.applyStun(adjacent, 0.5, false, tower);
+          this.damageEnemy(adjacent, tower, damage * 2, false);
+          if (adjacent.alive) this.applyStun(adjacent, 0.5, false, tower);
         }
       }
-      if (tower.ranks[0]! >= 6) { target.clawArmorShred = 0.5; target.clawArmorShredUntil = this.simTime + 5; }
+      if (target.alive && tower.ranks[0]! >= 6) { target.clawArmorShred = 0.5; target.clawArmorShredUntil = this.simTime + 5; }
       if (tower.ranks[2]! >= 3) {
         const affected = tower.ranks[2]! >= 6 ? this.enemies.filter((nearby) => nearby.alive && nearby.route === target.route)
-          : candidates.filter((nearby) => nearby.route === target.route && Math.abs(nearby.pathProgress - attackProgress) <= 2 * tower.blastMultiplier);
+          : candidates.filter((nearby) => nearby.alive && nearby.route === target.route && Math.abs(nearby.pathProgress - attackProgress) <= 2 * tower.blastMultiplier);
         for (const nearby of affected) {
           this.applyStun(nearby, 1, false, tower);
           if (tower.ranks[2]! >= 4) this.applySlow(nearby, 0.35, 2, tower);
@@ -3522,17 +3527,20 @@ export class GameScene extends Phaser.Scene {
         this.coins += 5; this.run.coins = this.coins;
       }
       if (tower.ranks[0]! >= 7 && tower.passiveUpgradeTimers.get('grand-prize-wave') !== this.wave) {
-        const strongest = this.chooseTarget(candidates.filter((enemy) => !enemy.spec.boss && !enemy.spec.miniboss), 'Strongest');
+        const strongest = this.chooseTarget(candidates.filter((enemy) => enemy.alive && !enemy.spec.boss && !enemy.spec.miniboss), 'Strongest');
         if (strongest) {
           const trail = this.addToBoard(this.add.graphics().setDepth(6));
-          trail.lineStyle(3, 0xb98cf5, 0.95).lineBetween(target.sprite.x, target.sprite.y, strongest.sprite.x, strongest.sprite.y);
+          trail.lineStyle(3, 0xb98cf5, 0.95).lineBetween(hitX, hitY, strongest.sprite.x, strongest.sprite.y);
           this.tweens.add({ targets: trail, alpha: 0, duration: 500, onComplete: () => trail.destroy() });
           strongest.pathProgress = 0; this.positionEnemy(strongest);
           tower.passiveUpgradeTimers.set('grand-prize-wave', this.wave);
         }
       }
-      this.positionEnemy(target);
-      this.drawShot(tower, target);
+      if (target.alive) this.positionEnemy(target);
+      const origin = this.towerCenter(tower.tile, tower.spec);
+      const grabLine = this.addToBoard(this.add.graphics().setDepth(6));
+      grabLine.lineStyle(2.5, tower.spec.color, 0.9).lineBetween(origin.x, origin.y, hitX, hitY);
+      this.tweens.add({ targets: grabLine, alpha: 0, duration: 150, onComplete: () => grabLine.destroy() });
       return;
     }
     if (tower.spec.id === 'lawnDartGnome' && tower.ranks[1]! >= 7) {
@@ -4071,7 +4079,12 @@ export class GameScene extends Phaser.Scene {
   private stepSodaMech(tower: PlacedTower, dt: number): void {
     if (tower.ranks[1]! >= 3) {
       let bundleTimer = (tower.passiveUpgradeTimers.get('soda-bundle') ?? 10) - dt;
-      if (bundleTimer <= 0) { this.coins += 20; this.run.coins = this.coins; bundleTimer = 10; }
+      if (bundleTimer <= 0) {
+        this.coins += 20;
+        this.run.coins = this.coins;
+        this.showSodaCoinBundle(tower);
+        bundleTimer = 10;
+      }
       tower.passiveUpgradeTimers.set('soda-bundle', bundleTimer);
     }
     if (tower.ranks[2]! >= 6) {
@@ -4108,6 +4121,19 @@ export class GameScene extends Phaser.Scene {
         tower.passiveUpgradeTimers.set('soda-gold-ready', this.simTime + 110);
       }
     }
+  }
+
+  private showSodaCoinBundle(tower: PlacedTower): void {
+    const { x, y } = this.towerCenter(tower.tile, tower.spec);
+    const coin = this.addToBoard(this.add.circle(x, y, Math.max(7, BOARD.cell * 0.24), 0xffd15e, 1)
+      .setStrokeStyle(2, 0x8e5e1b, 1).setDepth(9));
+    const shine = this.addToBoard(this.add.text(x, y, '$', { fontFamily: 'Arial', fontSize: `${Math.max(10, BOARD.cell * 0.32)}px`, color: '#fff5d7', fontStyle: 'bold' })
+      .setOrigin(0.5).setDepth(10));
+    const reward = this.addToBoard(this.add.text(x, y - BOARD.cell * 0.45, '+$20', { fontFamily: 'Arial', fontSize: `${Math.max(12, BOARD.cell * 0.34)}px`, color: '#ffd15e', fontStyle: 'bold', stroke: '#172532', strokeThickness: 3 })
+      .setOrigin(0.5).setDepth(10));
+    const floatY = y - BOARD.cell * 1.15;
+    this.tweens.add({ targets: [coin, shine], y: floatY, scale: 1.2, alpha: 0, duration: 850, onComplete: () => { coin.destroy(); shine.destroy(); } });
+    this.tweens.add({ targets: reward, y: floatY - 6, alpha: 0, duration: 1000, onComplete: () => reward.destroy() });
   }
 
   private stepPermafrostMortar(tower: PlacedTower, dt: number): void {
@@ -4599,7 +4625,7 @@ export class GameScene extends Phaser.Scene {
     if (tower && singleTargetHit && enemy.spec.ability === 'bubbleBath' && damage > 50) this.spawnSoapPuddle(enemy.pathProgress, enemy.route);
     if (tower && singleTargetHit) this.leaveTrackResidue(tower, enemy.pathProgress, enemy.route);
     if (tower?.spec.id === 'arcadeClawMachine' && tower.ranks[0]! >= 6) {
-      enemy.clawArmorShred = 0.5; enemy.clawArmorShredUntil = this.simTime + 5;
+      enemy.clawArmorShred = 1; enemy.clawArmorShredUntil = this.simTime + 5;
     }
     this.processEnemyThresholds(enemy);
     if (!enemy.eliteEcho && !enemy.eliteEchoSpawned && this.eliteCount(enemy, 'splitEcho') > 0 && enemy.hp > 0 && enemy.hp <= enemy.maxHp * 0.5) {
@@ -5391,6 +5417,17 @@ export class GameScene extends Phaser.Scene {
         turret.statsLabel?.setText(`${Math.ceil(turret.hp)}/${turret.maxHp} · A${turret.armor} · H${Math.round(turret.hyperarmor * 100)}%`);
       }
     }
+    if (tower.spec.id === 'arcadeClawMachine' && pathIndex === 1 && upgrade.rank === 6) {
+      const center = this.towerGridCenter(tower);
+      for (const nearby of this.towers) {
+        if (nearby === tower) continue;
+        const other = this.towerGridCenter(nearby);
+        if (Math.hypot(center.x - other.x, center.y - other.y) <= 4) {
+          nearby.permanentDamageMultiplier = Math.max(nearby.permanentDamageMultiplier, 1.5);
+          nearby.damageAuraMultiplier = Math.max(nearby.damageAuraMultiplier, 1.5);
+        }
+      }
+    }
     const text = upgrade.description.toLowerCase();
     if (tower.spec.id === 'hydraulicCarCrusher' && pathIndex === 2 && upgrade.rank === 2) tower.rangeMultiplier *= 1.05;
     if (tower.spec.id === 'prismMirror' && pathIndex === 2 && upgrade.rank === 1) tower.rangeMultiplier *= 1 + 1 / tower.spec.range;
@@ -5450,7 +5487,7 @@ export class GameScene extends Phaser.Scene {
     label.setVisible(false);
     const tower: PlacedTower = {
       tile, spec, sprite, art, label, spentCoins: totalSpent, cooldown: 0, priority: this.defaultPriority, aimAngle: 0, ranks: [0, 0, 0], totalUpgrades: 0, beamLockTime: 0,
-      damageMultiplier: 1, damageAuraMultiplier: 1, rangeMultiplier: 1, attackSpeedMultiplier: 1, blastMultiplier: 1,
+      damageMultiplier: 1, damageAuraMultiplier: 1, permanentDamageMultiplier: 1, rangeMultiplier: 1, attackSpeedMultiplier: 1, blastMultiplier: 1,
       slowBonus: 0, slowDurationMultiplier: 1, pushBonus: 0, stunChance: 0, supportPowerMultiplier: 1, pigeonAuraBonus: 0, coinBonusOnStick: 0,
       burnDpsBonus: 0, passiveSlow: 0, auraSlow: 0, nearbyFireRateBonus: 0, trackingMultiplier: 1, cuddleAuraRadiusMultiplier: 1, cuddleAuraPowerMultiplier: 1,
       baseAttackSpeedMultiplier: 1, guanoDropTimer: 0, helperPigeons: [], helperPigeonCooldowns: [],
