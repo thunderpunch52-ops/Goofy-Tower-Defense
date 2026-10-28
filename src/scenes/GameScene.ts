@@ -3070,6 +3070,14 @@ export class GameScene extends Phaser.Scene {
       tower.art.setAlpha(disabled ? 0.4 : siphoned ? 0.75 : 1);
       tower.label.setAlpha(disabled ? 0.45 : siphoned ? 0.75 : 1);
       this.stepPassiveUpgradeEffects(tower, dt);
+      if (tower.spec.id === 'catLaserPointer') this.stepCatLaserPath(tower, dt);
+      if (tower.spec.id === 'lawnAerator' && tower.ranks[1]! >= 7) {
+        const ready = tower.passiveUpgradeTimers.get('aerator-full-rpm-ready') ?? this.simTime;
+        if (this.simTime >= ready) {
+          tower.passiveUpgradeTimers.set('aerator-full-rpm-until', this.simTime + 8);
+          tower.passiveUpgradeTimers.set('aerator-full-rpm-ready', this.simTime + 30);
+        }
+      }
       if (tower.spec.attackType === 'trafficLight') this.stepTrafficLight(tower, dt);
       if (tower.spec.id === 'espressoMachine') this.stepEspressoMachine(tower, dt);
     }
@@ -3092,6 +3100,10 @@ export class GameScene extends Phaser.Scene {
       if (tower.spec.id === 'quantumPendulum' && tower.ranks[0]! > 0) {
         const cooldownSeconds = tower.ranks[0]! >= 7 ? 4 : tower.ranks[0]! >= 2 ? 7 : 10;
         tower.attackSpeedMultiplier *= 12 / cooldownSeconds;
+      }
+      if (tower.spec.id === 'lawnAerator' && tower.ranks[1]! >= 2) tower.attackSpeedMultiplier *= 2;
+      if (tower.spec.id === 'lawnAerator' && (tower.passiveUpgradeTimers.get('aerator-full-rpm-until') ?? 0) > this.simTime) {
+        tower.attackSpeedMultiplier *= 4;
       }
       if (tower.spec.id === 'angryPigeon' && tower.ranks[2]! >= 3) this.stepPigeonGuano(tower, dt);
       if (tower.spec.id === 'laserOfficePrinter') {
@@ -3124,8 +3136,46 @@ export class GameScene extends Phaser.Scene {
         tower.beamLockTime += dt;
         if (tower.cooldown > 0) continue;
         const dps = Math.min(200, 10 + (tower.beamLockTime * tower.trackingMultiplier / 5) * 190);
-        this.damageEnemy(target, tower, (dps / tower.spec.attackRate) * tower.damageMultiplier, true);
+        const beamDamage = (dps / tower.spec.attackRate) * tower.damageMultiplier;
+        const catSplitRank = tower.spec.id === 'catLaserPointer' ? tower.ranks[1]! : 0;
+        const splitLimit = catSplitRank >= 7 ? 10 : catSplitRank >= 5 ? 5 : catSplitRank >= 4 ? 4 : catSplitRank >= 3 ? 3 : 1;
+        const splitTargets = splitLimit > 1
+          ? candidates.filter((enemy) => enemy !== target && enemy.alive
+            && Phaser.Math.Distance.Between(enemy.sprite.x, enemy.sprite.y, target.sprite.x, target.sprite.y) <= BOARD.cell * (catSplitRank >= 5 ? 5 : 3))
+            .sort((a, b) => Phaser.Math.Distance.Between(a.sprite.x, a.sprite.y, target.sprite.x, target.sprite.y)
+              - Phaser.Math.Distance.Between(b.sprite.x, b.sprite.y, target.sprite.x, target.sprite.y)
+              || b.pathProgress - a.pathProgress).slice(0, splitLimit - 1)
+          : [];
+        // Draw secondary rays before damage can destroy a target's Phaser sprite.
+        if (splitTargets.length) {
+          const origin = this.towerCenter(tower.tile, tower.spec);
+          const colors = [0x71eaff, 0xff76c8, 0xffd45e, 0xa77bff];
+          for (let index = 0; index < splitTargets.length; index += 1) {
+            const split = splitTargets[index]!;
+            const previous = catSplitRank >= 5 && index > 0 ? splitTargets[index - 1]! : undefined;
+            const ray = this.addToBoard(this.add.graphics().setDepth(6));
+            ray.lineStyle(catSplitRank >= 7 ? 5 : 3, colors[index % colors.length]!, 0.72)
+              .lineBetween(previous?.sprite.x ?? origin.x, previous?.sprite.y ?? origin.y, split.sprite.x, split.sprite.y);
+            ray.lineStyle(1, 0xffffff, 0.9).lineBetween(previous?.sprite.x ?? origin.x, previous?.sprite.y ?? origin.y, split.sprite.x, split.sprite.y);
+            this.tweens.add({ targets: ray, alpha: 0, duration: 240, onComplete: () => ray.destroy() });
+          }
+        }
+        this.damageEnemy(target, tower, beamDamage, true);
         this.stepPrismRefraction(tower, target, (dps / tower.spec.attackRate) * tower.damageMultiplier);
+        for (let index = 0; index < splitTargets.length; index += 1) {
+          const split = splitTargets[index]!;
+          if (!split.alive) continue;
+          const splitPower = catSplitRank >= 7 ? 0.75 : 0.5;
+          this.damageEnemy(split, tower, beamDamage * splitPower);
+          if (catSplitRank >= 6) {
+            // The prism cycles fire, ice, and acid across split rays.
+            if (index % 3 === 0) {
+              split.burnSource = tower; split.burnDps = Math.max(split.burnDps, 3 * tower.damageMultiplier);
+              split.burnUntil = Math.max(split.burnUntil, this.simTime + 3);
+            } else if (index % 3 === 1) this.applySlow(split, 0.25, 2, tower);
+            else { split.armorShred = Math.max(split.armorShred, 0.2); split.armorShredUntil = Math.max(split.armorShredUntil, this.simTime + 3); }
+          }
+        }
         tower.cooldown = 1 / (tower.spec.attackRate * tower.attackSpeedMultiplier * globalSpeed);
         this.drawShot(tower, target);
         continue;
@@ -3447,15 +3497,40 @@ export class GameScene extends Phaser.Scene {
     }
     if (tower.spec.id === 'lawnAerator') {
       const radius = 1.15;
-      const targets = candidates.filter((enemy) => enemy.route === target.route && Math.abs(enemy.pathProgress - attackProgress) <= radius)
-        .slice(0, tower.ranks[0]! >= 6 ? 5 : tower.ranks[0]! >= 3 ? 3 : 1);
+      const fullRpm = (tower.passiveUpgradeTimers.get('aerator-full-rpm-until') ?? 0) > this.simTime;
+      const laneTargets = candidates.filter((enemy) => enemy.route === target.route && Math.abs(enemy.pathProgress - attackProgress) <= radius);
+      const cap = fullRpm ? laneTargets.length : tower.ranks[0]! >= 6 ? 5 : tower.ranks[0]! >= 3 ? 3 : 1;
+      let targets = laneTargets.filter((enemy) => enemy === target || tower.ranks[0]! < 3 || tower.ranks[0]! >= 6
+        || (!enemy.spec.boss && !enemy.spec.miniboss && !/heavy|anvil|compactor/i.test(enemy.spec.name)))
+        .sort((a, b) => a === target ? -1 : b === target ? 1 : Math.abs(a.pathProgress - attackProgress) - Math.abs(b.pathProgress - attackProgress))
+        .slice(0, cap);
+      // At tier 6 the second roller reaches a physically adjacent road lane too.
+      if (tower.ranks[1]! >= 6) {
+        const originPoint = this.positionOnRoute(attackProgress, target.route);
+        const secondRoller = candidates.filter((enemy) => enemy !== target && !targets.includes(enemy)
+          && Phaser.Math.Distance.Between(originPoint.x, originPoint.y, enemy.sprite.x, enemy.sprite.y) <= BOARD.cell * 1.15);
+        targets = [...targets, ...secondRoller.slice(0, fullRpm ? secondRoller.length : Math.max(0, cap - targets.length))];
+      }
       const hit = this.addToBoard(this.add.graphics().setDepth(6));
-      hit.lineStyle(3, 0xc5d7c8, 0.9).lineBetween(target.sprite.x - BOARD.cell * 0.55, target.sprite.y, target.sprite.x + BOARD.cell * 0.55, target.sprite.y);
-      this.tweens.add({ targets: hit, alpha: 0, duration: 180, onComplete: () => hit.destroy() });
+      hit.lineStyle(BOARD.cell * 0.58, fullRpm ? 0xffe079 : 0xc5d7c8, 0.34)
+        .lineBetween(target.sprite.x - BOARD.cell * 0.58, target.sprite.y, target.sprite.x + BOARD.cell * 0.58, target.sprite.y);
+      hit.lineStyle(3, fullRpm ? 0xfff3bc : 0xc5d7c8, 0.95)
+        .lineBetween(target.sprite.x - BOARD.cell * 0.58, target.sprite.y, target.sprite.x + BOARD.cell * 0.58, target.sprite.y);
+      this.tweens.add({ targets: hit, alpha: 0, duration: 240, onComplete: () => hit.destroy() });
+      const bleedDuration = tower.ranks[2]! >= 2 ? 6 : 4;
+      const bleedDps = tower.ranks[2]! >= 7 ? 8 : 2 * (tower.ranks[2]! >= 3 ? 1.5 : 1) * (tower.ranks[2]! >= 6 ? 2 : 1);
       for (const enemy of targets) {
+        if (!enemy.alive) continue;
+        const hitLine = this.addToBoard(this.add.graphics().setDepth(6));
+        hitLine.lineStyle(2.5, 0xd8e5c8, 0.85).lineBetween(enemy.sprite.x - BOARD.cell * 0.42, enemy.sprite.y + 3,
+          enemy.sprite.x + BOARD.cell * 0.42, enemy.sprite.y - 3);
+        this.tweens.add({ targets: hitLine, alpha: 0, duration: 200, onComplete: () => hitLine.destroy() });
         this.damageEnemy(enemy, tower, damage, enemy === target);
-        if (tower.ranks[2]! >= 1) {
-          enemy.burnSource = tower; enemy.burnDps = Math.max(enemy.burnDps, 2); enemy.burnUntil = Math.max(enemy.burnUntil, this.simTime + 4);
+        if (tower.ranks[2]! >= 1 && (enemy === target || tower.ranks[2]! >= 4)) {
+          enemy.burnSource = tower;
+          enemy.burnDps = Math.max(enemy.burnDps, bleedDps * tower.damageMultiplier);
+          enemy.burnUntil = Math.max(enemy.burnUntil, this.simTime + bleedDuration);
+          if (tower.ranks[2]! >= 5) enemy.passiveStacks.set(`lawn-aerator-bleed:${tower.tile.x},${tower.tile.y}`, this.simTime + bleedDuration);
         }
       }
       return;
@@ -3976,6 +4051,58 @@ export class GameScene extends Phaser.Scene {
         }
         if ((text.includes('push') || text.includes('backward') || text.includes('turn around')) && !enemy.spec.boss && !enemy.spec.miniboss) this.applyPushback(enemy, 0.5);
       }
+    }
+  }
+
+  /** Path 3 gives the Cat Laser Pointer its own visible, independently timed pounces. */
+  private stepCatLaserPath(tower: PlacedTower, dt: number): void {
+    if (tower.ranks[2]! < 3) return;
+    const cooldownKey = 'cat-helper-cooldown';
+    let cooldown = (tower.passiveUpgradeTimers.get(cooldownKey) ?? 0) - dt;
+    if (cooldown > 0) { tower.passiveUpgradeTimers.set(cooldownKey, cooldown); return; }
+    const inRange = this.enemies.filter((enemy) => enemy.alive
+      && this.distanceToPathTiles(this.towerGridCenter(tower), enemy.pathProgress, enemy.route)
+        <= this.effectiveTowerRange(tower) * this.globalRangeMultiplier());
+    const target = this.chooseTarget(inRange, tower.priority);
+    if (!target) { tower.passiveUpgradeTimers.set(cooldownKey, 0.25); return; }
+
+    const ramp = Math.min(200, 10 + (tower.beamLockTime * tower.trackingMultiplier / 5) * 190);
+    const helperCount = tower.ranks[2]! >= 7 ? 1 : tower.ranks[2]! >= 5 ? 3 : 1;
+    const interval = (tower.ranks[2]! >= 5 ? 1.35 : 1.7)
+      / (tower.ranks[2]! >= 6 ? Math.min(3, 1 + tower.beamLockTime / 4) : 1);
+    tower.passiveUpgradeTimers.set(cooldownKey, interval);
+
+    const origin = this.towerCenter(tower.tile, tower.spec);
+    if (tower.ranks[2]! >= 7) {
+      const angle = Math.atan2(target.sprite.y - origin.y, target.sprite.x - origin.x);
+      const lineHits = inRange.filter((enemy) => {
+        const dx = enemy.sprite.x - origin.x; const dy = enemy.sprite.y - origin.y;
+        const along = dx * Math.cos(angle) + dy * Math.sin(angle);
+        const across = Math.abs(dx * Math.sin(angle) - dy * Math.cos(angle));
+        return along >= 0 && along <= this.effectiveTowerRange(tower) * BOARD.cell && across <= BOARD.cell * 0.8;
+      });
+      const panther = this.addToBoard(this.add.text(origin.x, origin.y, '🐈‍⬛', { fontFamily: 'Arial', fontSize: '24px' })
+        .setOrigin(0.5).setDepth(8));
+      const slash = this.addToBoard(this.add.graphics().setDepth(7));
+      slash.lineStyle(BOARD.cell * 0.28, 0xff4a91, 0.45).lineBetween(origin.x, origin.y, target.sprite.x, target.sprite.y);
+      slash.lineStyle(2, 0xffd5ea, 1).lineBetween(origin.x, origin.y, target.sprite.x, target.sprite.y);
+      this.tweens.add({ targets: panther, x: target.sprite.x, y: target.sprite.y, duration: 230, onComplete: () => panther.destroy() });
+      this.tweens.add({ targets: slash, alpha: 0, duration: 320, onComplete: () => slash.destroy() });
+      for (const enemy of lineHits) this.damageEnemy(enemy, tower, ramp / 5 * 2, enemy === target);
+      return;
+    }
+
+    const selected = [target];
+    for (let index = 1; index < helperCount; index += 1) {
+      const next = this.chooseTarget(inRange.filter((enemy) => !selected.includes(enemy)), tower.priority);
+      if (next) selected.push(next);
+    }
+    for (const [index, enemy] of selected.entries()) {
+      const cat = this.addToBoard(this.add.text(origin.x + (index - 1) * 10, origin.y, '🐈', { fontFamily: 'Arial', fontSize: '17px' })
+        .setOrigin(0.5).setDepth(8));
+      this.tweens.add({ targets: cat, x: enemy.sprite.x, y: enemy.sprite.y, duration: 280, onComplete: () => cat.destroy() });
+      this.damageEnemy(enemy, tower, Math.max(8, ramp * 0.3), enemy === target);
+      if (tower.ranks[2]! >= 4 && enemy === target) this.applyStun(enemy, 1);
     }
   }
 
@@ -4572,6 +4699,15 @@ export class GameScene extends Phaser.Scene {
     if (tower?.spec.id === 'teslaCoilLamp' && enemy.megaShieldHp > 0) rawDamage *= 1.5;
     const afterArmor = exactDamage ? rawDamage : Math.max(1, rawDamage - effectiveArmor);
     let damageTakenMultiplier = this.simTime < enemy.damageTakenUntil ? enemy.damageTakenMultiplier : 1;
+    if (tower && PHYSICAL_PROJECTILE_TOWER_IDS.has(tower.spec.id)) {
+      const aeratorBleeding = [...enemy.passiveStacks.entries()].some(([key, until]) => {
+        if (!key.startsWith('lawn-aerator-bleed:') || until <= this.simTime) return false;
+        const tileKey = key.slice('lawn-aerator-bleed:'.length);
+        return this.towers.some((source) => source.spec.id === 'lawnAerator' && source.ranks[2]! >= 5
+          && `${source.tile.x},${source.tile.y}` === tileKey);
+      });
+      if (aeratorBleeding) damageTakenMultiplier *= 1.1;
+    }
     const damageSource = tower ?? damageCreditSource;
     const thermalSource = damageSource && ['sentientMicrowaveOven', 'hotSauceSprinkler'].includes(damageSource.spec.id);
     if (thermalSource && this.simTime < enemy.thermalDamageTakenUntil) damageTakenMultiplier *= enemy.thermalDamageTakenMultiplier;
