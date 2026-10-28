@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { BOARD_COLUMNS, BOARD_ROWS, CAMPAIGN_MAPS, createMapRoute, MAPS, type MapId } from '../game/map';
+import { BOARD_COLUMNS, BOARD_ROWS, CAMPAIGN_MAPS, createMapRoutes, MAPS, type MapId } from '../game/map';
 import { initializeProgress } from '../state/progression';
 
 const W = 1280;
@@ -40,7 +40,7 @@ export class LobbyScene extends Phaser.Scene {
     };
     openProgression(466, 'TOWER MASTERY', 'mastery');
     openProgression(520, 'BESTIARY & SAVE CODE', 'bestiary');
-    this.add.text(62, 594, 'GOOFY DEFENSE  •  3.1.4', { fontFamily: 'Arial', fontSize: '13px', color: C.muted, lineSpacing: 7 });
+    this.add.text(62, 594, 'GOOFY DEFENSE  •  3.5.0', { fontFamily: 'Arial', fontSize: '13px', color: C.muted, lineSpacing: 7 });
 
     this.add.text(W / 2, 88, 'THE GREAT SNACK DEFENSE', { fontFamily: 'Trebuchet MS', fontSize: '17px', color: C.mint, fontStyle: 'bold', letterSpacing: 3 }).setOrigin(0.5);
     this.add.text(W / 2, 165, 'Save the snacks!', { fontFamily: 'Trebuchet MS', fontSize: '44px', color: C.cream, fontStyle: 'bold', stroke: '#ff6d9e', strokeThickness: 2, shadow: { offsetX: 0, offsetY: 3, color: '#0c0a20', blur: 5, fill: true } }).setOrigin(0.5);
@@ -245,7 +245,7 @@ export class LobbyScene extends Phaser.Scene {
     const launch = (runMode: string, extra: Record<string, unknown> = {}) => {
       this.registry.remove('odysseyState');
       if (runMode.startsWith('draft')) { this.registry.set('campaignStage', 1); this.registry.set('selectedStar', 1); }
-      if (runMode === 'odyssey') this.registry.set('selectedStar', 1);
+      if (runMode === 'odyssey' || runMode === 'endless-odyssey') this.registry.set('selectedStar', 1);
       this.registry.set('runMode', runMode);
       Object.entries(extra).forEach(([key, value]) => this.registry.set(key, value));
       this.scene.start('Game');
@@ -295,24 +295,35 @@ export class LobbyScene extends Phaser.Scene {
         const miniInfo = this.add.text(640, 329, '3 maps: Beginner, Advanced, then Expert.\nClear all 3 for +15 gems and +1,000 Player XP.', { fontFamily: 'Arial', fontSize: '12px', color: C.muted, align: 'center', lineSpacing: 4, wordWrap: { width: 470 } }).setOrigin(0.5).setDepth(22); setupObjects.push(miniInfo);
         setupButton(640, 390, 420, 'GRAND ODYSSEY  ·  5 MAPS', 0x315b60, () => showRoutePreview(5));
         const grandInfo = this.add.text(640, 429, '5 maps with rising wave counts and route choices.\nClear all 5 for +40 gems and +2,500 Player XP.', { fontFamily: 'Arial', fontSize: '12px', color: C.muted, align: 'center', lineSpacing: 4, wordWrap: { width: 470 } }).setOrigin(0.5).setDepth(22); setupObjects.push(grandInfo);
-        const note = this.add.text(640, 493, 'Between maps, heal, spend gems on a one-map buff, or scout.\nExtract to keep 75% of your vault; a wipeout loses it.', { fontFamily: 'Arial', fontSize: '13px', color: C.muted, align: 'center', lineSpacing: 6 }).setOrigin(0.5).setDepth(22); setupObjects.push(note);
+        setupButton(640, 490, 420, 'ENDLESS ODYSSEY  ·  INFINITE SECTORS', 0x493d60, () => showRoutePreview(3, true));
+        const endlessInfo = this.add.text(640, 529, 'Explore an endless branching expedition. Every 3 maps, choose a route at a sector waypoint.', { fontFamily: 'Arial', fontSize: '12px', color: C.muted, align: 'center', lineSpacing: 4, wordWrap: { width: 475 } }).setOrigin(0.5).setDepth(22); setupObjects.push(endlessInfo);
+        const note = this.add.text(640, 586, 'Between sectors, heal, reinforce, scout, or extract with 75% of your vault. A wipeout loses it.', { fontFamily: 'Arial', fontSize: '12px', color: C.muted, align: 'center', lineSpacing: 5, wordWrap: { width: 490 } }).setOrigin(0.5).setDepth(22); setupObjects.push(note);
       };
-      const showRoutePreview = (length: number) => {
+      const showRoutePreview = (length: number, endless = false) => {
         const count = length === 5 ? 5 : 3;
         const progress = this.registry.get('mapProgress') as { unlockedMaps: MapId[]; gems: number };
         const campaignIds = new Set(Object.values(CAMPAIGN_MAPS));
-        const eligibleMaps = MAPS.filter((map) => campaignIds.has(map.id) || progress.unlockedMaps.includes(map.id) || map.category === 'Expert');
-        const categories = count === 3 ? ['Beginner', 'Advanced', 'Expert'] : ['Beginner', 'Beginner', 'Advanced', 'Advanced', 'Expert'];
-        const waves = count === 3 ? [10, 12, 15] : [10, 11, 12, 13, 15];
+        const eligibleMaps = endless ? MAPS : MAPS.filter((map) => campaignIds.has(map.id) || progress.unlockedMaps.includes(map.id) || map.category === 'Expert');
+        const categories = endless ? ['Beginner', 'Beginner', 'Beginner'] : count === 3 ? ['Beginner', 'Advanced', 'Expert'] : ['Beginner', 'Beginner', 'Advanced', 'Advanced', 'Expert'];
+        const waves = endless ? [10, 11, 12] : count === 3 ? [10, 12, 15] : [10, 11, 12, 13, 15];
         const mutationChoices = ['sluggishMechanisms', 'rapidFire', 'crowdedWaves', 'extendedReach', 'dulledImpact', 'bountySurge'];
         const nodes = categories.map((category, index) => {
           const choices = eligibleMaps.filter((map) => map.category === category);
           const map = choices[Math.floor(Math.random() * choices.length)] ?? MAPS.find((entry) => entry.category === category) ?? MAPS[0]!;
-          return { mapId: map.id, waves: waves[index]!, mutationId: mutationChoices[Math.floor(Math.random() * mutationChoices.length)]! };
+          const flexible = mutationChoices.filter((id) => !['sluggishMechanisms', 'crowdedWaves', 'dulledImpact'].includes(id));
+          const bad = mutationChoices.filter((id) => ['sluggishMechanisms', 'crowdedWaves', 'dulledImpact'].includes(id));
+          const sector = 1;
+          const sides: Array<'flex' | 'bad'> = !endless ? ['flex'] : sector === 1 ? ['flex'] : [];
+          const mutationIds = sides.map((side) => {
+            const pool = side === 'bad' ? bad : side === 'flex' ? flexible.concat(bad) : flexible;
+            return pool[Math.floor(Math.random() * pool.length)]!;
+          });
+          if (!mutationIds.length) mutationIds.push(mutationChoices[Math.floor(Math.random() * mutationChoices.length)]!);
+          return { mapId: map.id, waves: waves[index]!, mutationId: mutationIds[0]!, mutationIds };
         });
-        const odysseyState = { length: count, nodeIndex: 0, nodes, baseHealth: 100, carryCoins: 0, vaultXp: 0, vaultGems: 0, vaultMastery: {}, nextDamageBoost: 1, nextRangeBoost: 1, scoutUntil: -1 };
+        const odysseyState = { length: count, nodeIndex: 0, nodes, baseHealth: 100, carryCoins: 0, vaultXp: 0, vaultGems: 0, vaultMastery: {}, nextDamageBoost: 1, nextRangeBoost: 1, scoutUntil: -1, endless, sector: 1 };
         clearSetup();
-        setupHeader(`${length === 3 ? 'MINI' : 'GRAND'} ODYSSEY ROUTE`, 'Follow the expedition map from the first node to the finish.', showLengthPicker);
+        setupHeader(endless ? 'ENDLESS ODYSSEY · SECTOR 1' : `${length === 3 ? 'MINI' : 'GRAND'} ODYSSEY ROUTE`, endless ? 'Pick a map for the first sector. Routes and mutators keep branching as you survive.' : 'Follow the expedition map from the first node to the finish.', showLengthPicker);
         let firstNode = 0;
         const leftCardX = 495;
         const rightCardX = 790;
@@ -335,14 +346,13 @@ export class LobbyScene extends Phaser.Scene {
         const scrollHandle = this.add.rectangle(640, 536, handleWidth, 10, 0x75efc1).setDepth(24).setInteractive({ useHandCursor: true }); setupObjects.push(scrollHandle);
         const prev = setupButton(390, 325, 40, '‹', 0x2b2856, () => { firstNode = Math.max(0, firstNode - 1); refreshRoute(); });
         const next = setupButton(890, 325, 40, '›', 0x2b2856, () => { firstNode = Math.min(count - 2, firstNode + 1); refreshRoute(); });
-        const startButton = setupButton(640, 613, 300, `START ${length === 3 ? 'MINI' : 'GRAND'} ODYSSEY`, 0x315b60, () => launch('odyssey', { odysseyLength: count, odysseyState }));
+        const startButton = setupButton(640, 613, 300, endless ? 'START ENDLESS ODYSSEY' : `START ${length === 3 ? 'MINI' : 'GRAND'} ODYSSEY`, 0x315b60, () => launch(endless ? 'endless-odyssey' : 'odyssey', { odysseyLength: count, odysseyState }));
         const mutationName = (id: string) => ({ sluggishMechanisms: 'Sluggish Mechanisms', rapidFire: 'Rapid Fire', crowdedWaves: 'Crowded Waves', extendedReach: 'Extended Reach', dulledImpact: 'Dulled Impact', bountySurge: 'Bounty Surge' } as Record<string, string>)[id] ?? id;
         const paintMap = (nodeIndex: number, x: number) => {
           const map = MAPS.find((entry) => entry.id === nodes[nodeIndex]!.mapId)!;
           const art = this.add.graphics().setDepth(23);
           art.fillStyle(map.ground, 1).fillRoundedRect(x - 108, cardY - 69, 216, 138, 9);
-          const drawRoute = (routeMap: MapId, variant: 'main' | 'left' | 'right') => {
-            const route = createMapRoute(routeMap, variant);
+          const drawRoute = (route: ReturnType<typeof createMapRoutes>[number]) => {
             art.lineStyle(9, map.road, 1);
             for (let i = 1; i < route.length; i += 1) {
               const a = route[i - 1]!; const b = route[i]!;
@@ -351,8 +361,7 @@ export class LobbyScene extends Phaser.Scene {
               art.lineBetween(px(a.x), py(a.y), px(b.x), py(b.y));
             }
           };
-          if (map.id === 'dual-spawn-convergence' || map.id === 'split-fork') { drawRoute(map.id, 'left'); drawRoute(map.id, 'right'); }
-          else drawRoute(map.id, 'main');
+          for (const route of createMapRoutes(map.id)) drawRoute(route);
           mapArt.push(art); setupObjects.push(art);
         };
         const refreshRoute = () => {
@@ -368,12 +377,12 @@ export class LobbyScene extends Phaser.Scene {
           };
           const one = details(firstNode); const two = details(firstNode + 1);
           firstLabel.setText(firstNode === 0 ? 'NODE 1 · START' : `NODE ${firstNode + 1}`);
-          secondLabel.setText(`NODE ${firstNode + 2}${firstNode + 2 === count ? ' · FINISH' : ''}`);
+          secondLabel.setText(`NODE ${firstNode + 2}${!endless && firstNode + 2 === count ? ' · FINISH' : ''}`);
           firstName.setText(one.map.name); secondName.setText(two.map.name);
-          firstMeta.setText(`${one.map.category.toUpperCase()} · ${one.map.theme}\n${one.node.waves} waves · ${mutationName(one.node.mutationId)}`);
-          secondMeta.setText(`${two.map.category.toUpperCase()} · ${two.map.theme}\n${two.node.waves} waves · ${mutationName(two.node.mutationId)}`);
+          firstMeta.setText(`${one.map.category.toUpperCase()} · ${one.map.theme}\n${one.node.waves} waves · ${(one.node.mutationIds ?? [one.node.mutationId]).map(mutationName).join(' + ')}`);
+          secondMeta.setText(`${two.map.category.toUpperCase()} · ${two.map.theme}\n${two.node.waves} waves · ${(two.node.mutationIds ?? [two.node.mutationId]).map(mutationName).join(' + ')}`);
           paintMap(firstNode, leftCardX); paintMap(firstNode + 1, rightCardX);
-          progressLabel.setText(`SHOWING NODES ${firstNode + 1}–${firstNode + 2} OF ${count}`);
+          progressLabel.setText(endless ? `SECTOR 1 · SHOWING NODES ${firstNode + 1}–${firstNode + 2} OF ∞` : `SHOWING NODES ${firstNode + 1}–${firstNode + 2} OF ${count}`);
           const travel = Math.max(0, firstNode / (count - 2));
           scrollHandle.setX(640 - (430 - handleWidth) / 2 + travel * (430 - handleWidth));
           prev.bg.setAlpha(firstNode === 0 ? 0.4 : 1); next.bg.setAlpha(firstNode >= count - 2 ? 0.4 : 1);

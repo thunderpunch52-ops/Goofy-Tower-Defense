@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { ENEMIES, STAGE_ONE_WAVES, WAVE_EVENT_NAMES, normalizeStar, starScaledBounty, starScaledHp, starScaledLeak, waveClearPayout, type EnemyKey, type EnemySpec, type WaveGroup } from '../game/content';
-import { BOARD_COLUMNS, BOARD_ROWS, CAMPAIGN_MAPS, createMapRoute, getMap, getMapObstacles, MAPS, routeKey, widenRouteTiles, type MapId, type MapObstacle, type Tile } from '../game/map';
+import { BOARD_COLUMNS, BOARD_ROWS, CAMPAIGN_MAPS, createMapRoutes, getMap, getMapObstacles, MAPS, routeKey, widenRouteTiles, type MapId, type MapObstacle, type Tile } from '../game/map';
 import { TOWERS, type TowerSpec, type UpgradeTier } from '../game/towers';
 import { ENDLESS_ELITES, ENDLESS_MEGA_BOSS_COST, endlessBloodPactStages, endlessBountyMultiplier, endlessEliteSpec, endlessEliteStats, endlessHermesCrowdControlCharges, endlessHpMultiplier, endlessLeakDamage, endlessEnemyRosterCost, endlessMegaBossDamageLimit, endlessMegaBossShield, endlessSiphonSlowPerHit, endlessThreatForEnemy, endlessWaveBudget, endlessWaveEnemyBudget, generateEndlessWave, type EndlessEliteId, type EndlessThreat } from '../game/endless';
 import { createRunSession } from '../state/runSession';
@@ -75,11 +75,12 @@ interface PendingImpact { enemyId: number; tower: PlacedTower; damage: number; s
 interface RouteArrow { route: Tile[]; progress: number; elapsed: number; graphic: Phaser.GameObjects.Graphics }
 interface MegaHazard { route: Tile[]; progress: number; expiresAt: number; speedMultiplier: number; graphic: Phaser.GameObjects.Graphics }
 interface CampaignMutation { id: string; name: string; description: string; side: 'GOOD' | 'BAD' | 'HELL' | 'UNIQUE'; stackCap: number; stackable?: boolean }
-interface OdysseyNode { mapId: MapId; waves: number; mutationId: string; branchMutationId?: string }
+interface OdysseyNode { mapId: MapId; waves: number; mutationId: string; mutationIds?: string[]; branchMutationId?: string }
 interface OdysseyState {
   length: number; nodeIndex: number; nodes: OdysseyNode[]; baseHealth: number; carryCoins: number;
   vaultXp: number; vaultGems: number; vaultMastery: Record<string, number>;
   nextDamageBoost: number; nextRangeBoost: number; scoutUntil: number;
+  endless?: boolean; sector?: number; pendingBranches?: OdysseyNode[][]; selectedBranch?: number;
 }
 
 const CAMPAIGN_MUTATIONS: CampaignMutation[] = [
@@ -138,6 +139,7 @@ export class GameScene extends Phaser.Scene {
   private campaignStage = 1;
   private mapPreview = false;
   private endlessMode = false;
+  private endlessOdysseyMode = false;
   private endlessMysteryEnabled = false;
   private endlessModifiersEnabled = false;
   private draftMode: 'none' | 'campaign' | 'endless' = 'none';
@@ -292,11 +294,13 @@ export class GameScene extends Phaser.Scene {
     initializeProgress(this.registry);
     const runMode = String(this.registry.get('runMode') ?? 'campaign');
     this.mapPreview = runMode === 'map-preview';
-    this.endlessMode = runMode === 'endless' || runMode === 'draft-endless';
+    this.endlessOdysseyMode = runMode === 'endless-odyssey';
+    this.endlessMode = runMode === 'endless' || runMode === 'draft-endless' || this.endlessOdysseyMode;
     this.draftMode = runMode === 'draft-campaign' ? 'campaign' : runMode === 'draft-endless' ? 'endless' : 'none';
     this.draftRoster = this.draftMode === 'none' ? [] : [...((this.registry.get('draftRoster') as string[] | undefined) ?? [])];
-    this.odysseyMode = runMode === 'odyssey';
-    this.odysseyState = this.odysseyMode ? (this.registry.get('odysseyState') as OdysseyState | undefined) ?? this.createOdysseyState(Number(this.registry.get('odysseyLength') ?? 3)) : undefined;
+    this.odysseyMode = runMode === 'odyssey' || this.endlessOdysseyMode;
+    this.odysseyState = this.odysseyMode ? (this.registry.get('odysseyState') as OdysseyState | undefined)
+      ?? this.createOdysseyState(Number(this.registry.get('odysseyLength') ?? 3), this.endlessOdysseyMode) : undefined;
     if (this.odysseyMode && this.odysseyState) this.registry.set('odysseyState', this.odysseyState);
     this.endlessMysteryEnabled = runMode === 'endless' && Boolean(this.registry.get('endlessMysteryEnabled'));
     this.endlessModifiersEnabled = runMode === 'endless' && Boolean(this.registry.get('endlessModifiersEnabled'));
@@ -309,7 +313,7 @@ export class GameScene extends Phaser.Scene {
       this.baseHealth = this.odysseyState.baseHealth;
       this.coins = 450 + Math.min(1500, this.odysseyState.carryCoins);
       this.runMasteryXp = new Map(Object.entries(this.odysseyState.vaultMastery));
-      for (const id of [activeOdysseyNode?.mutationId, activeOdysseyNode?.branchMutationId]) {
+      for (const id of [...(activeOdysseyNode?.mutationIds ?? [activeOdysseyNode?.mutationId]), activeOdysseyNode?.branchMutationId]) {
         const mutation = CAMPAIGN_MUTATIONS.find((item) => item.id === id);
         if (mutation) {
           this.mutationStacks[mutation.id] = 1;
@@ -317,9 +321,7 @@ export class GameScene extends Phaser.Scene {
         }
       }
     }
-    this.visualRoutes = this.mapId === 'dual-spawn-convergence' || this.mapId === 'split-fork'
-      ? [createMapRoute(this.mapId, 'left'), createMapRoute(this.mapId, 'right')]
-      : [createMapRoute(this.mapId)];
+    this.visualRoutes = createMapRoutes(this.mapId);
     this.route = this.visualRoutes[0]!;
     this.roadTiles = new Set(this.visualRoutes.flatMap((route) => widenRouteTiles(route).map(routeKey)));
     this.prepareMapObstacles();
@@ -560,7 +562,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private get totalWaves(): number {
-    if (this.endlessMode) return Number.POSITIVE_INFINITY;
+    if (this.endlessMode && !this.endlessOdysseyMode) return Number.POSITIVE_INFINITY;
     if (this.odysseyMode && this.odysseyState) return this.odysseyState.nodes[this.odysseyState.nodeIndex]?.waves ?? 15;
     if (this.draftMode === 'campaign') return 15;
     if (this.mapPreview) return STAGE_ONE_WAVES.length;
@@ -569,7 +571,19 @@ export class GameScene extends Phaser.Scene {
     return 15;
   }
 
-  private createOdysseyState(length: number): OdysseyState {
+  private endlessProgressWave(localWave = this.wave): number {
+    if (!this.endlessOdysseyMode || !this.odysseyState) return localWave;
+    const completedNodeWaves = this.odysseyState.nodes
+      .slice(0, this.odysseyState.nodeIndex)
+      .reduce((total, node) => total + node.waves, 0);
+    return completedNodeWaves + localWave;
+  }
+
+  private createOdysseyState(length: number, endless = false): OdysseyState {
+    if (endless) return {
+      length: 3, nodeIndex: 0, nodes: this.generateEndlessOdysseySectorNodes(1), baseHealth: 100, carryCoins: 0,
+      vaultXp: 0, vaultGems: 0, vaultMastery: {}, nextDamageBoost: 1, nextRangeBoost: 1, scoutUntil: -1, endless: true, sector: 1,
+    };
     const nodeCount = length === 5 ? 5 : 3;
     const progression = this.registry.get('mapProgress') as { unlockedMaps?: MapId[] } | undefined;
     const campaignIds = new Set(Object.values(CAMPAIGN_MAPS));
@@ -586,7 +600,32 @@ export class GameScene extends Phaser.Scene {
       const waveCount = nodeCount === 3 ? [10, 12, 15][index]! : [10, 11, 12, 13, 15][index]!;
       return { mapId: map.id, waves: waveCount, mutationId: mutationIds[Math.floor(Math.random() * mutationIds.length)]! };
     });
-    return { length: nodeCount, nodeIndex: 0, nodes, baseHealth: 100, carryCoins: 0, vaultXp: 0, vaultGems: 0, vaultMastery: {}, nextDamageBoost: 1, nextRangeBoost: 1, scoutUntil: -1 };
+    return { length: nodeCount, nodeIndex: 0, nodes, baseHealth: 100, carryCoins: 0, vaultXp: 0, vaultGems: 0, vaultMastery: {}, nextDamageBoost: 1, nextRangeBoost: 1, scoutUntil: -1, endless, sector: 1 };
+  }
+
+  private generateEndlessOdysseySectorNodes(sector: number): OdysseyNode[] {
+    const category = sector === 1 ? 'Beginner' : sector === 2 ? 'Advanced' : sector === 3 ? 'Expert' : undefined;
+    const mapPool = category ? MAPS.filter((map) => map.category === category) : MAPS;
+    const flexible = CAMPAIGN_MUTATIONS.filter((mutation) => mutation.side === 'GOOD' || mutation.side === 'BAD');
+    const bad = CAMPAIGN_MUTATIONS.filter((mutation) => mutation.side === 'BAD');
+    return Array.from({ length: 3 }, (_, nodeInSector) => {
+      const maps = mapPool.length ? mapPool : MAPS;
+      const map = maps[Math.floor(Math.random() * maps.length)]!;
+      const slots: Array<'flexible' | 'bad'> = sector === 1 ? ['flexible']
+        : sector === 2 ? ['flexible', 'bad']
+          : sector === 3 ? ['flexible', 'flexible'] : ['flexible', 'flexible', 'bad'];
+      const mutationIds: string[] = [];
+      for (const slot of slots) {
+        const pool = (slot === 'bad' ? bad : flexible).filter((mutation) => !mutationIds.includes(mutation.id));
+        if (pool.length) mutationIds.push(pool[Math.floor(Math.random() * pool.length)]!.id);
+      }
+      return {
+        mapId: map.id,
+        waves: sector >= 4 ? 15 : Math.min(15, 9 + sector + nodeInSector),
+        mutationId: mutationIds[0] ?? 'rapidFire',
+        mutationIds,
+      };
+    });
   }
 
   private clearDraftOverlay(): void {
@@ -774,7 +813,9 @@ export class GameScene extends Phaser.Scene {
     g.fillStyle(0xffd15e, 0.9).fillRoundedRect(400, 48, 80, 4, 2);
     g.fillStyle(0xffffff, 0.12);
     [[54, 64], [365, 657], [917, 65], [1225, 654], [402, 664], [874, 54]].forEach(([x, y]) => g.fillCircle(x!, y!, 3));
-    const modeHeading = this.odysseyMode && this.odysseyState ? `ODYSSEY  ·  NODE ${this.odysseyState.nodeIndex + 1}/${this.odysseyState.length}` : this.draftMode === 'campaign' ? 'DRAFT CAMPAIGN' : this.draftMode === 'endless' ? `DRAFT ENDLESS  /  ${this.star} STAR` : this.mapPreview ? 'MAP PREVIEW   ·   STAGE 1 WAVES' : this.endlessMode ? `ENDLESS   /   ${this.star} STAR` : `STAGE ${this.campaignStage}   /   ${this.star} STAR`;
+    const modeHeading = this.endlessOdysseyMode && this.odysseyState
+      ? `ENDLESS ODYSSEY  ·  SECTOR ${this.odysseyState.sector ?? Math.floor(this.odysseyState.nodeIndex / 3) + 1}  ·  NODE ${this.odysseyState.nodeIndex + 1}`
+      : this.odysseyMode && this.odysseyState ? `ODYSSEY  ·  NODE ${this.odysseyState.nodeIndex + 1}/${this.odysseyState.length}` : this.draftMode === 'campaign' ? 'DRAFT CAMPAIGN' : this.draftMode === 'endless' ? `DRAFT ENDLESS  /  ${this.star} STAR` : this.mapPreview ? 'MAP PREVIEW   ·   STAGE 1 WAVES' : this.endlessMode ? `ENDLESS   /   ${this.star} STAR` : `STAGE ${this.campaignStage}   /   ${this.star} STAR`;
     this.add.text(68, 54, modeHeading, { fontFamily: 'Arial', fontSize: '13px', color: COLORS.muted, fontStyle: 'bold', letterSpacing: 2 });
     this.add.text(68, 77, getMap(this.mapId).name, { fontFamily: 'Arial', fontSize: '21px', color: COLORS.cream, fontStyle: 'bold', wordWrap: { width: 300 } });
     this.add.text(1068, 58, 'GOOFY TOWER SHOP', { fontFamily: 'Trebuchet MS', fontSize: '13px', color: COLORS.muted, fontStyle: 'bold', letterSpacing: 1 });
@@ -839,15 +880,18 @@ export class GameScene extends Phaser.Scene {
       const [x, y] = key.split(',').map(Number);
       graphics.fillRect(BOARD.x + x! * BOARD.cell, BOARD.y + y! * BOARD.cell, BOARD.cell, BOARD.cell);
     }
+    this.drawThemedRoads(graphics);
     this.mapObstacleGraphics = this.addToBoard(this.add.graphics().setDepth(1));
     this.drawMapObstacles(this.mapObstacleGraphics);
     this.createRouteArrows();
     const start = this.route[0]!;
     const end = this.route[this.route.length - 1]!;
-    if (this.mapId === 'dual-spawn-convergence') {
+    if (this.visualRoutes.length > 1) {
       for (const route of this.visualRoutes) this.addToBoard(this.add.circle(this.tileCenter(route[0]!).x, this.tileCenter(route[0]!).y, BOARD.cell * 0.52, 0xa9e7c2, 0.95));
     } else this.addToBoard(this.add.circle(this.tileCenter(start).x, this.tileCenter(start).y, BOARD.cell * 0.52, 0xa9e7c2, 0.95));
-    this.addToBoard(this.add.circle(this.tileCenter(end).x, this.tileCenter(end).y, BOARD.cell * 0.52, 0xef7e70, 0.95));
+    if (this.visualRoutes.length > 1) {
+      for (const route of this.visualRoutes) this.addToBoard(this.add.circle(this.tileCenter(route[route.length - 1]!).x, this.tileCenter(route[route.length - 1]!).y, BOARD.cell * 0.52, 0xef7e70, 0.95));
+    } else this.addToBoard(this.add.circle(this.tileCenter(end).x, this.tileCenter(end).y, BOARD.cell * 0.52, 0xef7e70, 0.95));
     const hitArea = this.addToBoard(this.add.rectangle(BOARD.x + boardWidth / 2, BOARD.y + boardHeight / 2, boardWidth, boardHeight, 0x000000, 0)
       .setInteractive({ useHandCursor: true }));
     hitArea.on('pointermove', (pointer: Phaser.Input.Pointer) => {
@@ -892,6 +936,70 @@ export class GameScene extends Phaser.Scene {
       keys.forEach((key) => this.obstacleTiles.add(key));
       return true;
     });
+  }
+
+  /** Small continuous lane details reinforce each new map's visual theme. */
+  private drawThemedRoads(graphics: Phaser.GameObjects.Graphics): void {
+    const center = (tile: Tile) => ({
+      x: BOARD.x + (tile.x + 0.5) * BOARD.cell,
+      y: BOARD.y + (tile.y + 0.5) * BOARD.cell,
+    });
+    const strokeRoutes = (color: number, alpha: number, width: number) => {
+      graphics.lineStyle(width, color, alpha);
+      for (const route of this.visualRoutes) {
+        for (let i = 1; i < route.length; i += 1) {
+          const a = center(route[i - 1]!);
+          const b = center(route[i]!);
+          graphics.lineBetween(a.x, a.y, b.x, b.y);
+        }
+      }
+    };
+    switch (this.mapId) {
+      case 'world-engine-bastion': {
+        strokeRoutes(0x7384a3, 0.85, 1.2);
+        strokeRoutes(0x60dfff, 0.95, 0.7);
+        const nexus = center({ x: 31, y: 38 });
+        graphics.fillStyle(0x263d56, 0.82).fillCircle(nexus.x, nexus.y, BOARD.cell * 4.2);
+        graphics.lineStyle(1.6, 0xd8bd73, 0.96).strokeCircle(nexus.x, nexus.y, BOARD.cell * 4.2);
+        graphics.lineStyle(0.8, 0x70eaff, 0.85).strokeCircle(nexus.x, nexus.y, BOARD.cell * 3.1);
+        graphics.fillStyle(0x87f2ff, 0.8).fillCircle(nexus.x, nexus.y, BOARD.cell * 0.55);
+        break;
+      }
+      case 'core-meltdown-vent':
+        strokeRoutes(0x382a2b, 0.9, 2.8);
+        strokeRoutes(0xffb15e, 0.85, 0.65);
+        for (const route of this.visualRoutes) for (const tile of route) {
+          const c = center(tile);
+          for (const side of [-1, 1]) {
+            graphics.fillStyle(0xff7043, 0.72).fillCircle(c.x + side * BOARD.cell * 0.86, c.y, 0.9);
+          }
+        }
+        break;
+      case 'bio-vascular-spire':
+        strokeRoutes(0x123d37, 0.85, 2.6);
+        strokeRoutes(0x79f5a4, 0.92, 0.75);
+        for (const route of this.visualRoutes) for (let i = 0; i < route.length; i += 8) {
+          const c = center(route[i]!);
+          graphics.fillStyle(0xc2ff8b, 0.86).fillCircle(c.x, c.y, 1.1);
+        }
+        break;
+      case 'abyssal-trench':
+        strokeRoutes(0x102539, 0.95, 3);
+        strokeRoutes(0x5fd7ec, 0.83, 0.65);
+        for (const route of this.visualRoutes) for (let i = 0; i < route.length; i += 13) {
+          const c = center(route[i]!);
+          graphics.lineStyle(0.7, 0xa6f5ff, 0.58).strokeCircle(c.x, c.y, 2.4);
+        }
+        break;
+      case 'alchemists-crucible':
+        strokeRoutes(0x594a48, 0.9, 2.6);
+        strokeRoutes(0xf0d17a, 0.95, 0.75);
+        for (const route of this.visualRoutes) for (let i = 0; i < route.length; i += 11) {
+          const c = center(route[i]!);
+          graphics.fillStyle(0x70efaa, 0.74).fillCircle(c.x, c.y, 1.05);
+        }
+        break;
+    }
   }
 
   private drawMapObstacles(graphics: Phaser.GameObjects.Graphics): void {
@@ -1119,6 +1227,138 @@ export class GameScene extends Phaser.Scene {
           graphics.fillStyle(0x63dcff, 0.55).fillCircle(tileX(col) + cell / 2, tileY(73) + cell / 2, 2.1);
           graphics.fillStyle(0xfff5d7, 0.8).fillCircle(tileX(col) + cell / 2, tileY(75) + cell / 2, 1.5);
           graphics.fillStyle(0xff6d9e, 0.65).fillCircle(tileX(col) + cell / 2, tileY(77) + cell / 2, 1.4);
+        }
+        break;
+      }
+      case 'overflowing-silos': {
+        for (let row = 4; row < BOARD_ROWS; row += 8) for (let col = 3; col < BOARD_COLUMNS; col += 9) {
+          if (open(col, row)) {
+            graphics.lineStyle(0.65, 0xd9c68d, 0.22).strokeCircle(tileX(col) + cell, tileY(row) + cell, cell * 1.4);
+            mark(col, row, 0xc5aa66, 0.28, 3.2, 2.2, 1.4, 1.8);
+          }
+        }
+        break;
+      }
+      case 'obsidian-foundries': {
+        for (let row = 2; row < BOARD_ROWS; row += 6) {
+          line(BOARD.x, tileY(row), BOARD.x + BOARD_COLUMNS * cell, tileY(row), 0x9a4c3a, 0.16, 1);
+          for (const col of [8, 15, 26, 37, 49, 58]) mark(col, row, 0xff7147, 0.24, 3.8, 2, 1.4, 1.8);
+        }
+        break;
+      }
+      case 'chrono-stitched-ruin': {
+        for (let row = 5; row < BOARD_ROWS; row += 10) for (let col = (row * 3) % 7 + 2; col < BOARD_COLUMNS; col += 11) {
+          if (!open(col, row)) continue;
+          const cx = tileX(col) + cell; const cy = tileY(row) + cell;
+          graphics.lineStyle(0.9, 0x8da0ca, 0.25).strokeCircle(cx, cy, cell * 1.8);
+          graphics.lineStyle(0.7, 0xc6a8f2, 0.22).lineBetween(cx - 4, cy - 4, cx + 4, cy + 4);
+        }
+        break;
+      }
+      case 'world-engine-bastion': {
+        // Aegis-Prime's floating platforms and orbital clockwork are painted
+        // into the ground layer so the marble transit lanes stay unobstructed.
+        for (const [x, y, radius] of [[7, 12, 3.2], [55, 10, 4], [8, 64, 4.4], [55, 65, 3.5], [31, 7, 2.5]] as const) {
+          if (!open(x, y)) continue;
+          const px = tileX(x) + cell / 2; const py = tileY(y) + cell / 2;
+          graphics.fillStyle(0x718098, 0.34).fillCircle(px, py, cell * radius);
+          graphics.lineStyle(1.5, 0xd7bd79, 0.56).strokeCircle(px, py, cell * radius);
+          graphics.lineStyle(0.7, 0x86eaff, 0.52).strokeCircle(px, py, cell * radius * 0.68);
+          graphics.fillStyle(0x99f3ff, 0.65).fillCircle(px, py, 1.8);
+        }
+        for (const [cxTile, cyTile, radius] of [[31, 38, 18], [31, 38, 27], [31, 38, 35]] as const) {
+          const cx = tileX(cxTile) + cell / 2; const cy = tileY(cyTile) + cell / 2;
+          graphics.lineStyle(1.3, 0xd8bd73, 0.34).strokeCircle(cx, cy, radius * cell);
+          for (let i = 0; i < 12; i += 1) {
+            const angle = i * Math.PI / 6;
+            graphics.fillStyle(i % 2 ? 0x68ddff : 0xffd15e, 0.56)
+              .fillCircle(cx + Math.cos(angle) * radius * cell, cy + Math.sin(angle) * radius * cell, 1.4);
+          }
+        }
+        for (let row = 2; row < BOARD_ROWS; row += 9) for (let col = 2; col < BOARD_COLUMNS; col += 9) mark(col, row, 0x6de6ff, 0.28, 2, 2, 2, 2);
+        break;
+      }
+      case 'core-meltdown-vent': {
+        // Obsidian strata and glowing lava seams fill the caldera floor; road
+        // tiles are painted later and remain clean, continuous scaffolds.
+        for (let row = 1; row < BOARD_ROWS; row += 8) {
+          const offset = (row % 16) * 1.2;
+          for (let col = 2; col < BOARD_COLUMNS - 2; col += 10) {
+            const x = tileX(col + (offset > 8 ? 2 : 0)); const y = tileY(row);
+            line(x, y, x + cell * 3, y - cell * 0.8, 0x100f19, 0.38, 1.3);
+            line(x + cell * 1.2, y + 2, x + cell * 2.8, y - cell * 0.5, 0xff6038, 0.28, 0.8);
+          }
+        }
+        for (let row = 3; row < BOARD_ROWS; row += 7) for (let col = 2; col < BOARD_COLUMNS; col += 7) {
+          if (!open(col, row)) continue;
+          const x = tileX(col) + cell / 2; const y = tileY(row) + cell / 2;
+          graphics.fillStyle(0xff6e32, 0.16).fillEllipse(x, y, cell * 3.3, cell * 2.1);
+          graphics.lineStyle(0.75, 0xffba58, 0.2).strokeEllipse(x, y, cell * 3.3, cell * 2.1);
+        }
+        break;
+      }
+      case 'bio-vascular-spire': {
+        // Root webs and spore blooms make the surrounding floor feel alive.
+        for (let row = 7; row < BOARD_ROWS; row += 13) {
+          for (let col = 4; col < BOARD_COLUMNS - 4; col += 16) {
+            const x = tileX(col) + cell / 2; const y = tileY(row) + cell / 2;
+            graphics.fillStyle(0x7ef5a2, 0.16).fillCircle(x, y, cell * 1.7);
+            graphics.fillStyle(0xb7ff9a, 0.42).fillCircle(x - 2, y - 1, 1.3);
+            graphics.fillStyle(0x54dce2, 0.36).fillCircle(x + 2, y + 1, 1);
+          }
+        }
+        for (let col = 2; col < BOARD_COLUMNS; col += 5) {
+          const bend = (col * 7) % 13 + 8;
+          for (let row = 2; row < BOARD_ROWS - 4; row += 1) {
+            if (!open(col, row) || !open(col + 1, row)) continue;
+            const xx = tileX(col) + cell / 2 + Math.sin((row + bend) / 5) * 4;
+            const yy = tileY(row) + cell / 2;
+            line(xx, yy, xx + Math.sin(row / 4) * 2, yy + 3, 0x64df9c, 0.13, 1.1);
+          }
+        }
+        for (let row = 5; row < BOARD_ROWS; row += 12) for (let col = 5; col < BOARD_COLUMNS; col += 10) {
+          if (open(col, row)) graphics.fillStyle(0x8bffa7, 0.26).fillCircle(tileX(col) + cell, tileY(row) + cell, 2);
+        }
+        break;
+      }
+      case 'abyssal-trench': {
+        // Broad pressure-current bands and sparse glints sit beneath the
+        // trench borders, with basalt wreckage occupying reserved props.
+        for (let row = 5; row < BOARD_ROWS; row += 15) {
+          line(BOARD.x, tileY(row), BOARD.x + BOARD_COLUMNS * cell, tileY(row) + 5, 0x39728c, 0.14, 2.2);
+          line(BOARD.x, tileY(row) + 3, BOARD.x + BOARD_COLUMNS * cell, tileY(row) + 8, 0xa3e7f1, 0.08, 0.7);
+        }
+        for (let row = 2; row < BOARD_ROWS; row += 6) {
+          for (let col = 2; col < BOARD_COLUMNS; col += 8) {
+            if (!open(col, row)) continue;
+            const x = tileX(col) + cell / 2; const y = tileY(row) + cell / 2;
+            graphics.lineStyle(0.8, 0x72c6df, 0.2).strokeCircle(x, y, 2.8 + (col + row) % 3);
+            graphics.fillStyle(0x9cefff, 0.32).fillCircle(x, y, 0.8);
+          }
+        }
+        break;
+      }
+      case 'alchemists-crucible': {
+        // Laboratory floor joints and pale toxic vapor clouds frame the route.
+        for (let row = 4; row < BOARD_ROWS; row += 8) {
+          for (let col = 4 + (row % 2) * 3; col < BOARD_COLUMNS; col += 12) {
+            if (!open(col, row)) continue;
+            const x = tileX(col) + cell / 2; const y = tileY(row) + cell / 2;
+            graphics.fillStyle(0x51d99b, 0.1).fillEllipse(x, y, cell * 4.5, cell * 2.1);
+          }
+        }
+        for (let row = 0; row <= BOARD_ROWS; row += 6) line(BOARD.x, tileY(row), BOARD.x + BOARD_COLUMNS * cell, tileY(row), 0xd6c27c, 0.12, 0.7);
+        for (let row = 4; row < BOARD_ROWS; row += 9) for (let col = 4; col < BOARD_COLUMNS; col += 9) {
+          if (!open(col, row)) continue;
+          const x = tileX(col) + cell / 2; const y = tileY(row) + cell / 2;
+          graphics.fillStyle(0x42c48a, 0.19).fillCircle(x, y, 2.4);
+          graphics.lineStyle(0.75, 0xc4ac6b, 0.27).strokeCircle(x, y, 4.2);
+          graphics.fillStyle(0x6eeaa2, 0.25).fillRect(x - 0.7, y - 4.5, 1.4, 2.5);
+        }
+        for (const col of [10, 25, 38, 53]) {
+          for (const row of [8, 30, 49, 71]) {
+            if (open(col, row)) graphics.lineStyle(1, 0xe2c66d, 0.23).strokeRect(tileX(col), tileY(row), cell * 2, cell * 2);
+          }
         }
         break;
       }
@@ -1558,11 +1798,18 @@ export class GameScene extends Phaser.Scene {
     this.run.wave = number;
     this.endlessAssignments.clear();
     this.endlessSpawnedCount = 0;
-    if (this.endlessMode && number > STAGE_ONE_WAVES.length) {
+    const progressWave = this.endlessProgressWave(number);
+    if (this.endlessOdysseyMode && progressWave > STAGE_ONE_WAVES.length) {
+      this.waveGroups = generateEndlessWave(progressWave, Math.random, endlessWaveEnemyBudget(progressWave));
+      this.allocateEndlessWaveBudget(progressWave);
+    } else if (this.endlessMode && !this.endlessOdysseyMode && number > STAGE_ONE_WAVES.length) {
       this.waveGroups = generateEndlessWave(number, Math.random, endlessWaveEnemyBudget(number));
       this.allocateEndlessWaveBudget(number);
     } else {
-      const scheduled = number <= STAGE_ONE_WAVES.length ? STAGE_ONE_WAVES[number - 1]! : generateEndlessWave(number);
+      const scheduledNumber = this.endlessOdysseyMode ? progressWave : number;
+      const scheduled = scheduledNumber <= STAGE_ONE_WAVES.length
+        ? STAGE_ONE_WAVES[scheduledNumber - 1]!
+        : generateEndlessWave(scheduledNumber);
       this.waveGroups = !this.endlessMode && !this.mapPreview && !this.odysseyMode && this.draftMode === 'none' && this.star >= 2
         ? this.starCampaignGroups(number, scheduled) : scheduled;
     }
@@ -1581,7 +1828,7 @@ export class GameScene extends Phaser.Scene {
     this.waveDamageByTower.clear();
     this.waveBuffTargets.clear();
     this.waveDebuffTargets.clear();
-    const endlessModifierWave = this.endlessMode && this.endlessModifiersEnabled && number >= 5 && number % 5 === 0 && number % 20 !== 0;
+    const endlessModifierWave = this.endlessMode && !this.endlessOdysseyMode && this.endlessModifiersEnabled && number >= 5 && number % 5 === 0 && number % 20 !== 0;
     const stageFiveModifierWave = !this.endlessMode && !this.mapPreview && this.campaignStage === 5 && [5, 10, 15].includes(number);
     if (endlessModifierWave || stageFiveModifierWave) this.showModifierChoice();
   }
@@ -1706,8 +1953,9 @@ export class GameScene extends Phaser.Scene {
   private createEnemy(enemyKey: EnemyKey, pathProgress: number, inheritedRoute?: Tile[], elites: EndlessEliteId[] = [], eliteEcho = false): ActiveEnemy {
     const baseSpec = ENEMIES[enemyKey]!;
     const endlessThreat = endlessThreatForEnemy(enemyKey);
-    let spec: EnemySpec = this.endlessMode && this.wave > 15
-      ? { ...baseSpec, hp: Math.floor(baseSpec.hp * endlessHpMultiplier(this.wave)), leak: endlessLeakDamage(baseSpec.leak, this.wave, endlessThreat) }
+    const effectiveWave = this.endlessProgressWave();
+    let spec: EnemySpec = this.endlessMode && effectiveWave > 15
+      ? { ...baseSpec, hp: Math.floor(baseSpec.hp * endlessHpMultiplier(effectiveWave)), leak: endlessLeakDamage(baseSpec.leak, effectiveWave, endlessThreat) }
       : baseSpec;
     if (eliteEcho) spec = { ...spec, hp: 1, bounty: 0, color: 0x22e58e };
     const eliteStats = endlessEliteStats(baseSpec, elites);
@@ -1743,7 +1991,7 @@ export class GameScene extends Phaser.Scene {
     const label = this.addToBoard(this.add.text(start.x, start.y, marker, { fontFamily: 'Arial', fontSize: `${labelSize}px`, color: '#101820', fontStyle: 'bold' }).setOrigin(0.5).setDepth(5));
     label.setVisible(false);
     const enemy: ActiveEnemy = {
-      id: this.nextEnemyId++, spec, pathProgress, route, hp, maxHp: hp, waveNumber: this.wave, endlessThreat, elites: eliteEcho ? [] : [...elites], eliteGlows, megaShieldGlow, megaVortexGlow, megaPhase: 1, megaTransitionUntil: 0, megaShieldHp: 0, megaAbilityTimer: this.simTime + (spec.id === 'doomsdayClockworkGoliath' ? 6 : 5), eliteEcho, elitePhantomTimer: this.simTime + 4, eliteEchoSpawned: false, sprite, art, hpBar, label, alive: true,
+      id: this.nextEnemyId++, spec, pathProgress, route, hp, maxHp: hp, waveNumber: effectiveWave, endlessThreat, elites: eliteEcho ? [] : [...elites], eliteGlows, megaShieldGlow, megaVortexGlow, megaPhase: 1, megaTransitionUntil: 0, megaShieldHp: 0, megaAbilityTimer: this.simTime + (spec.id === 'doomsdayClockworkGoliath' ? 6 : 5), eliteEcho, elitePhantomTimer: this.simTime + 4, eliteEchoSpawned: false, sprite, art, hpBar, label, alive: true,
       slowUntil: 0, slowAmount: 0, reverseMomentumUntil: 0, burnUntil: 0, burnDps: 0, burnTick: 0, stunUntil: 0,
       freezeUntil: 0, unfreezeSlowPending: false, wetUntil: 0,
       ccImmuneUntil: 0, stunImmuneUntil: 0, pushImmuneUntil: 0, roombaPulledUntil: 0, speedBoostUntil: 0, speedBoostAmount: 0, suctionUntil: 0,
@@ -1772,13 +2020,12 @@ export class GameScene extends Phaser.Scene {
 
   private routeForNextEnemy(): Tile[] {
     const index = this.waveSpawnIndex++;
-    if (this.mapId === 'dual-spawn-convergence') return this.visualRoutes[index % this.visualRoutes.length]!;
     if (this.mapId === 'split-fork') {
       const evenWaveTakesLeft = this.wave % 2 === 0;
       const evenIndexTakesLeft = index % 2 === 0;
       return this.visualRoutes[evenWaveTakesLeft === evenIndexTakesLeft ? 0 : 1]!;
     }
-    return this.route;
+    return this.visualRoutes[index % this.visualRoutes.length] ?? this.route;
   }
 
   private spawnDelayFor(spec: EnemySpec): number {
@@ -5111,7 +5358,8 @@ export class GameScene extends Phaser.Scene {
     this.awardWaveTowerXp();
     if (this.draftMode === 'endless') this.registry.set('draftEndlessBestWave', Math.max(this.wave, Number(this.registry.get('draftEndlessBestWave') ?? 0)));
     const n = this.wave <= 24 ? 5 : 7 + 2 * Math.floor((this.wave - 25) / 10);
-    const basePayout = this.endlessMode ? Math.min(3800, 300 + 2 * this.star * n * this.wave) : waveClearPayout(this.wave, this.star);
+    const payoutWave = this.endlessProgressWave(this.wave);
+    const basePayout = this.endlessMode ? Math.min(3800, 300 + 2 * this.star * n * payoutWave) : waveClearPayout(this.wave, this.star);
     const payout = Math.min(3800, Math.floor(basePayout
       * (1 + Math.min(1.5, this.mutationStack('bountySurge') * 0.2))
       * (this.mutationStack('resourceScarcity') ? 0.4 : 1)));
@@ -5163,6 +5411,37 @@ export class GameScene extends Phaser.Scene {
     this.odysseyState.nextDamageBoost = 1;
     this.odysseyState.nextRangeBoost = 1;
     this.registry.set('odysseyState', this.odysseyState);
+    if (this.endlessOdysseyMode) {
+      const state = this.odysseyState;
+      const nextIndex = state.nodeIndex + 1;
+      if (nextIndex < state.length && nextIndex % 3 !== 0) {
+        // Nodes inside a sector flow straight into the next map. Waypoint
+        // management and extraction are reserved for each three-node sector.
+        state.nodeIndex = nextIndex;
+        state.baseHealth = this.baseHealth;
+        state.carryCoins = Math.min(1500, Math.floor(this.coins * 0.5 * (this.mutationStack('resourceScarcity') ? 0.4 : 1)));
+        this.registry.set('odysseyState', state);
+        this.registry.set('selectedMapId', state.nodes[nextIndex]!.mapId);
+        this.scene.restart();
+        return;
+      }
+      const nextSector = (state.sector ?? Math.floor(state.nodeIndex / 3) + 1) + 1;
+      if (!state.pendingBranches) {
+        const routeA = this.generateEndlessOdysseySectorNodes(nextSector);
+        const routeB = this.generateEndlessOdysseySectorNodes(nextSector);
+        routeA[0]!.mutationIds = [...new Set([...(routeA[0]!.mutationIds ?? []), 'bountySurge'])];
+        routeB[0]!.mutationIds = [...new Set([...(routeB[0]!.mutationIds ?? []), 'discountPath'])];
+        routeA[0]!.branchMutationId = 'titanBlood';
+        routeB[0]!.branchMutationId = 'crowdedWaves';
+        state.pendingBranches = [routeA, routeB];
+        state.selectedBranch = undefined;
+      }
+      this.registry.set('odysseyState', state);
+      this.phase = 'between-waves';
+      this.run.phase = 'between-waves';
+      this.showOdysseyRestStop();
+      return;
+    }
     if (this.odysseyState.nodeIndex + 1 >= this.odysseyState.length) {
       this.settleOdyssey(1, true);
       return;
@@ -5186,11 +5465,13 @@ export class GameScene extends Phaser.Scene {
     add(this.add.rectangle(W / 2, H / 2, W, H, 0x071016, 0.86).setInteractive());
     add(this.add.rectangle(W / 2, H / 2, 760, 600, 0x201e40).setStrokeStyle(2, 0x75efc1));
     add(this.add.text(W / 2, 93, `ODYSSEY REST STOP  ·  NODE ${state.nodeIndex + 1} CLEARED`, { fontFamily: 'Arial', fontSize: '22px', color: '#75efc1', fontStyle: 'bold', letterSpacing: 1 }).setOrigin(0.5));
-    const next = state.nodes[state.nodeIndex + 1]!;
+    const next = state.nodes[state.nodeIndex + 1] ?? state.pendingBranches?.[0]?.[0];
+    if (!next) return;
     const nextMap = MAPS.find((map) => map.id === next.mapId)!;
-    const nextMutation = CAMPAIGN_MUTATIONS.find((mutation) => mutation.id === next.mutationId)!;
+    const nextMutations = [...(next.mutationIds ?? [next.mutationId]), ...(next.branchMutationId ? [next.branchMutationId] : [])]
+      .map((id) => CAMPAIGN_MUTATIONS.find((mutation) => mutation.id === id)?.name ?? id);
     const scout = state.scoutUntil >= state.nodeIndex + 1;
-    add(this.add.text(W / 2, 132, `NEXT: ${nextMap.name} · ${next.waves} WAVES${scout ? `\nMUTATOR: ${nextMutation.name}` : ''}${scout && state.nodeIndex + 2 < state.nodes.length ? `\nAFTER THAT: ${MAPS.find((map) => map.id === state.nodes[state.nodeIndex + 2]!.mapId)?.name} · ${CAMPAIGN_MUTATIONS.find((m) => m.id === state.nodes[state.nodeIndex + 2]!.mutationId)?.name}` : ''}`, { fontFamily: 'Arial', fontSize: '13px', color: '#c4c3e5', align: 'center', lineSpacing: 6, wordWrap: { width: 680 } }).setOrigin(0.5));
+    add(this.add.text(W / 2, 132, `${this.endlessOdysseyMode ? `SECTOR ${state.sector ?? 1} WAYPOINT` : 'NEXT MAP'} · ${nextMap.name} · ${next.waves} WAVES${scout ? `\nMUTATORS: ${nextMutations.join(' + ')}` : ''}${scout && state.nodeIndex + 2 < state.nodes.length ? `\nAFTER THAT: ${MAPS.find((map) => map.id === state.nodes[state.nodeIndex + 2]!.mapId)?.name}` : ''}`, { fontFamily: 'Arial', fontSize: '13px', color: '#c4c3e5', align: 'center', lineSpacing: 6, wordWrap: { width: 680 } }).setOrigin(0.5));
     const feedback = add(this.add.text(W / 2, 232, `Base ${this.baseHealth}/100 · Current coins $${this.coins} · Vault ${state.vaultXp.toLocaleString()} XP / ${state.vaultGems} gems`, { fontFamily: 'Arial', fontSize: '14px', color: '#fff5d7', align: 'center' }).setOrigin(0.5));
     const option = (y: number, label: string, action: () => void, color = 0x292750) => {
       const rect = add(this.add.rectangle(W / 2, y, 560, 42, color).setStrokeStyle(1, 0x63dcff).setInteractive({ useHandCursor: true }));
@@ -5214,11 +5495,21 @@ export class GameScene extends Phaser.Scene {
     option(432, scout ? 'SCOUT REPORT · VIEW EXACT WAVE COMPOSITIONS' : 'SCOUT AHEAD · REVEAL THE NEXT TWO NODES', () => {
       state.scoutUntil = Math.min(state.length - 1, state.nodeIndex + 2); this.registry.set('odysseyState', state); this.showOdysseyScoutReport();
     });
-    const branchNode = state.nodeIndex === 1 || state.nodeIndex === 3;
+    const branchNode = this.endlessOdysseyMode || state.nodeIndex === 1 || state.nodeIndex === 3;
     if (branchNode) {
-      add(this.add.text(W / 2, 472, 'CHOOSE YOUR ROUTE', { fontFamily: 'Arial', fontSize: '12px', color: '#ffd15e', fontStyle: 'bold', letterSpacing: 1 }).setOrigin(0.5));
-      option(505, 'A · BOUNTY SURGE + HEAVY ENEMIES', () => { next.branchMutationId = 'titanBlood'; next.mutationId = 'bountySurge'; this.registry.set('odysseyState', state); feedback.setText('Route A selected: richer bounties, tougher enemies.'); }, 0x493044);
-      option(552, 'B · UPGRADE DISCOUNTS + FAST CROWDS', () => { next.branchMutationId = 'crowdedWaves'; next.mutationId = 'discountPath'; this.registry.set('odysseyState', state); feedback.setText('Route B selected: cheaper upgrades, faster crowds.'); }, 0x354b5d);
+      add(this.add.text(W / 2, 472, this.endlessOdysseyMode ? 'CHOOSE A THREE-MAP BRANCH' : 'CHOOSE YOUR ROUTE', { fontFamily: 'Arial', fontSize: '12px', color: '#ffd15e', fontStyle: 'bold', letterSpacing: 1 }).setOrigin(0.5));
+      if (this.endlessOdysseyMode && state.pendingBranches) {
+        const labels = state.pendingBranches.map((branch, index) => {
+          const first = branch[0]!;
+          const mapName = MAPS.find((map) => map.id === first.mapId)?.name ?? 'Map';
+          return `ROUTE ${index === 0 ? 'A' : 'B'} · ${mapName} → ${MAPS.find((map) => map.id === branch[1]!.mapId)?.name} → ${MAPS.find((map) => map.id === branch[2]!.mapId)?.name}`;
+        });
+        option(505, labels[0]!, () => { state.selectedBranch = 0; this.registry.set('odysseyState', state); feedback.setText('Route A selected · Bounty surge and heavy enemies.'); }, 0x493044);
+        option(552, labels[1]!, () => { state.selectedBranch = 1; this.registry.set('odysseyState', state); feedback.setText('Route B selected · Crowded waves and fast crowds.'); }, 0x354b5d);
+      } else {
+        option(505, 'A · BOUNTY SURGE + HEAVY ENEMIES', () => { next.branchMutationId = 'titanBlood'; next.mutationId = 'bountySurge'; this.registry.set('odysseyState', state); feedback.setText('Route A selected: richer bounties, tougher enemies.'); }, 0x493044);
+        option(552, 'B · UPGRADE DISCOUNTS + FAST CROWDS', () => { next.branchMutationId = 'crowdedWaves'; next.mutationId = 'discountPath'; this.registry.set('odysseyState', state); feedback.setText('Route B selected: cheaper upgrades, faster crowds.'); }, 0x354b5d);
+      }
     }
     const continueY = branchNode ? 600 : 520;
     const continueButton = add(this.add.rectangle(520, continueY, 250, 42, 0x315b60).setStrokeStyle(1, 0x75efc1).setInteractive({ useHandCursor: true }));
@@ -5226,8 +5517,17 @@ export class GameScene extends Phaser.Scene {
     let continuing = false;
     const continueRun = () => {
       if (continuing) return;
-      if (branchNode && !next.branchMutationId) { feedback.setText('Choose Route A or B before continuing.'); return; }
+      if (this.endlessOdysseyMode && (state.selectedBranch !== 0 && state.selectedBranch !== 1)) { feedback.setText('Choose a three-map branch before continuing.'); return; }
+      if (!this.endlessOdysseyMode && branchNode && !next.branchMutationId) { feedback.setText('Choose Route A or B before continuing.'); return; }
       continuing = true;
+      if (this.endlessOdysseyMode) {
+        const selected = state.pendingBranches![state.selectedBranch!]!;
+        state.nodes.push(...selected);
+        state.length = state.nodes.length;
+        state.sector = (state.sector ?? 1) + 1;
+        state.pendingBranches = undefined;
+        state.selectedBranch = undefined;
+      }
       state.nodeIndex += 1; state.baseHealth = this.baseHealth; state.carryCoins = Math.min(1500, Math.floor(this.coins * 0.5 * (this.mutationStack('resourceScarcity') ? 0.4 : 1)));
       this.registry.set('odysseyState', state); this.registry.set('selectedMapId', state.nodes[state.nodeIndex]!.mapId);
       // Close the rest-stop gate before restarting. The next node begins with
@@ -5285,11 +5585,11 @@ export class GameScene extends Phaser.Scene {
     if (!state) return;
     this.clearOdysseyOverlay();
     const baseXp = Math.floor(state.vaultXp * retain);
-    const bonusXp = fullVictory ? state.length === 3 ? 1000 : 2500 : 0;
-    const gems = Math.floor(state.vaultGems * retain) + (fullVictory ? state.length === 3 ? 15 : 40 : 0);
+    const bonusXp = fullVictory && !state.endless ? state.length === 3 ? 1000 : 2500 : 0;
+    const gems = Math.floor(state.vaultGems * retain) + (fullVictory && !state.endless ? state.length === 3 ? 15 : 40 : 0);
     if (retain === 0.75) this.registry.set('odysseyExtractions', Number(this.registry.get('odysseyExtractions') ?? 0) + 1);
-    if (fullVictory && state.length === 3) this.registry.set('miniOdysseyClears', Number(this.registry.get('miniOdysseyClears') ?? 0) + 1);
-    if (fullVictory && state.length === 5) this.registry.set('grandOdysseyVictory', true);
+    if (fullVictory && !state.endless && state.length === 3) this.registry.set('miniOdysseyClears', Number(this.registry.get('miniOdysseyClears') ?? 0) + 1);
+    if (fullVictory && !state.endless && state.length === 5) this.registry.set('grandOdysseyVictory', true);
     if (baseXp + bonusXp > 0) grantPlayerXp(this.registry, baseXp + bonusXp);
     const progress = this.registry.get('mapProgress') as { gems: number; unlockedMaps: MapId[] };
     progress.gems += gems; this.registry.set('mapProgress', progress);

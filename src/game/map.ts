@@ -3,14 +3,16 @@ export const BOARD_ROWS = 80;
 
 export interface Tile { x: number; y: number }
 export interface MapObstacle { x: number; y: number; width: number; height: number; kind: 'toy' | 'grill' | 'shelf' | 'book' | 'box' | 'table' | 'sand' | 'crate' | 'pins' }
-export type MapId = 'simple-loop' | 'dual-u-turn' | 'open-rectangular' | 'short-s-bend' | 'zig-zag-cascade' | 'dual-spawn-convergence' | 'marathon-corridor' | 'split-fork' | 'gauntlet';
+export type MapId = 'simple-loop' | 'dual-u-turn' | 'open-rectangular' | 'short-s-bend' | 'zig-zag-cascade' | 'dual-spawn-convergence' | 'marathon-corridor' | 'split-fork' | 'gauntlet'
+  | 'overflowing-silos' | 'obsidian-foundries' | 'chrono-stitched-ruin' | 'world-engine-bastion' | 'core-meltdown-vent'
+  | 'bio-vascular-spire' | 'abyssal-trench' | 'alchemists-crucible';
 export type MapRouteVariant = 'main' | 'left' | 'right';
 
 export interface MapSpec {
   id: MapId;
   number: number;
   name: string;
-  category: 'Beginner' | 'Advanced' | 'Expert';
+  category: 'Beginner' | 'Advanced' | 'Expert' | 'Ascended';
   theme: string;
   ground: number;
   road: number;
@@ -29,6 +31,14 @@ export const MAPS: MapSpec[] = [
   { id: 'marathon-corridor', number: 7, name: 'The Marathon Corridor', category: 'Advanced', theme: 'Mini-Golf Madness', ground: 0x3f6655, road: 0xb2c76e, unlockCost: 5, startsUnlocked: false },
   { id: 'split-fork', number: 8, name: 'The Split Fork', category: 'Expert', theme: 'Construction Zone Chaos', ground: 0x625347, road: 0xd2ad73, unlockCost: 5, startsUnlocked: false },
   { id: 'gauntlet', number: 9, name: 'The Gauntlet', category: 'Expert', theme: 'The Slippery Bowling Alley', ground: 0x26394f, road: 0x8bd6dc, unlockCost: 5, startsUnlocked: false },
+  { id: 'overflowing-silos', number: 10, name: 'The Overflowing Silos', category: 'Beginner', theme: 'A grain silo figure-eight', ground: 0x465541, road: 0xb7a477, unlockCost: 5, startsUnlocked: false },
+  { id: 'obsidian-foundries', number: 11, name: 'The Obsidian Foundries', category: 'Advanced', theme: 'Twin furnace lanes', ground: 0x302d35, road: 0x9c8581, unlockCost: 5, startsUnlocked: false },
+  { id: 'chrono-stitched-ruin', number: 12, name: 'The Chrono-Stitched Ruin', category: 'Expert', theme: 'A fractured temporal labyrinth', ground: 0x373653, road: 0x98a5bc, unlockCost: 5, startsUnlocked: false },
+  { id: 'world-engine-bastion', number: 13, name: 'The World-Engine Bastion', category: 'Ascended', theme: 'Aegis-Prime orbital citadel', ground: 0x293d5a, road: 0xe6e9ec, unlockCost: 10, startsUnlocked: false },
+  { id: 'core-meltdown-vent', number: 14, name: 'The Core Meltdown Vent', category: 'Ascended', theme: 'Prometheus caldera scaffolds', ground: 0x352725, road: 0xb18369, unlockCost: 10, startsUnlocked: false },
+  { id: 'bio-vascular-spire', number: 15, name: 'The Bio-Vascular Spire', category: 'Ascended', theme: 'Genesis-Weaver bio-dome', ground: 0x203c35, road: 0x74b889, unlockCost: 10, startsUnlocked: false },
+  { id: 'abyssal-trench', number: 16, name: 'The Abyssal Trench', category: 'Ascended', theme: 'Leviathan deep-sea gorge', ground: 0x182c3d, road: 0x5fa4b8, unlockCost: 10, startsUnlocked: false },
+  { id: 'alchemists-crucible', number: 17, name: "The Alchemist's Crucible", category: 'Ascended', theme: 'Necro-Alchemist vault laboratory', ground: 0x403746, road: 0xd0b776, unlockCost: 10, startsUnlocked: false },
 ];
 
 export const CAMPAIGN_MAPS: Record<number, MapId> = {
@@ -56,7 +66,7 @@ function routeFrom(points: Tile[]): Tile[] {
   return route;
 }
 
-const ROUTES: Record<MapId, Tile[]> = {
+const ROUTES: Partial<Record<MapId, Tile[]>> = {
   // The return lane is offset so its widened road stays distinct from the
   // outbound lane instead of merging into a broad blocked strip.
   'simple-loop': routeFrom([{ x: 32, y: 0 }, { x: 32, y: 71 }, { x: 45, y: 71 }, { x: 45, y: 9 }, { x: 36, y: 9 }, { x: 36, y: 79 }]),
@@ -74,6 +84,37 @@ const ROUTES: Record<MapId, Tile[]> = {
 const SPLIT_ROUTES: Record<'left' | 'right', Tile[]> = {
   left: routeFrom([{ x: 32, y: 0 }, { x: 32, y: 15 }, { x: 10, y: 15 }, { x: 10, y: 50 }, { x: 32, y: 50 }, { x: 32, y: 79 }]),
   right: routeFrom([{ x: 32, y: 0 }, { x: 32, y: 15 }, { x: 54, y: 15 }, { x: 54, y: 50 }, { x: 32, y: 50 }, { x: 32, y: 79 }]),
+};
+
+const MULTI_ROUTES: Partial<Record<MapId, Tile[][]>> = {
+  'overflowing-silos': [routeFrom([{ x: 0, y: 40 }, { x: 16, y: 40 }, { x: 16, y: 20 }, { x: 32, y: 20 }, { x: 32, y: 60 }, { x: 48, y: 60 }, { x: 48, y: 40 }, { x: 62, y: 40 }])],
+  'obsidian-foundries': [
+    routeFrom([{ x: 20, y: 0 }, { x: 20, y: 48 }, { x: 30, y: 48 }, { x: 30, y: 51 }, { x: 31, y: 51 }, { x: 31, y: 78 }]),
+    routeFrom([{ x: 42, y: 0 }, { x: 42, y: 48 }, { x: 32, y: 48 }, { x: 32, y: 51 }, { x: 31, y: 51 }, { x: 31, y: 78 }]),
+  ],
+  'chrono-stitched-ruin': [
+    routeFrom([{ x: 31, y: 0 }, { x: 31, y: 10 }, { x: 4, y: 10 }, { x: 4, y: 70 }, { x: 58, y: 70 }, { x: 58, y: 36 }, { x: 6, y: 36 }, { x: 0, y: 36 }]),
+    routeFrom([{ x: 31, y: 0 }, { x: 31, y: 10 }, { x: 4, y: 10 }, { x: 4, y: 70 }, { x: 58, y: 70 }, { x: 58, y: 36 }, { x: 62, y: 36 }]),
+  ],
+  'world-engine-bastion': [
+    routeFrom([{ x: 0, y: 38 }, { x: 14, y: 38 }, { x: 14, y: 20 }, { x: 31, y: 20 }, { x: 31, y: 38 }]),
+    routeFrom([{ x: 31, y: 0 }, { x: 31, y: 16 }, { x: 48, y: 16 }, { x: 48, y: 38 }, { x: 31, y: 38 }]),
+    routeFrom([{ x: 62, y: 38 }, { x: 48, y: 38 }, { x: 48, y: 58 }, { x: 31, y: 58 }, { x: 31, y: 38 }]),
+  ],
+  'core-meltdown-vent': [routeFrom([{ x: 6, y: 0 }, { x: 6, y: 78 }]), routeFrom([{ x: 56, y: 0 }, { x: 56, y: 78 }])],
+  'bio-vascular-spire': [
+    routeFrom([{ x: 31, y: 0 }, { x: 31, y: 20 }, { x: 0, y: 20 }, { x: 0, y: 0 }]),
+    routeFrom([{ x: 31, y: 0 }, { x: 31, y: 20 }, { x: 62, y: 20 }, { x: 62, y: 0 }]),
+    routeFrom([{ x: 31, y: 0 }, { x: 31, y: 20 }, { x: 0, y: 20 }, { x: 0, y: 78 }]),
+    routeFrom([{ x: 31, y: 0 }, { x: 31, y: 20 }, { x: 62, y: 20 }, { x: 62, y: 78 }]),
+  ],
+  'abyssal-trench': [routeFrom([{ x: 31, y: 0 }, { x: 31, y: 18 }, { x: 12, y: 18 }, { x: 12, y: 42 }, { x: 50, y: 42 }, { x: 50, y: 66 }, { x: 31, y: 66 }, { x: 31, y: 78 }])],
+  'alchemists-crucible': [
+    routeFrom([{ x: 0, y: 0 }, { x: 0, y: 24 }, { x: 20, y: 24 }, { x: 20, y: 54 }, { x: 20, y: 78 }]),
+    routeFrom([{ x: 62, y: 0 }, { x: 62, y: 24 }, { x: 42, y: 24 }, { x: 42, y: 54 }, { x: 42, y: 78 }]),
+    routeFrom([{ x: 0, y: 78 }, { x: 0, y: 54 }, { x: 20, y: 54 }, { x: 20, y: 78 }]),
+    routeFrom([{ x: 62, y: 78 }, { x: 62, y: 54 }, { x: 42, y: 54 }, { x: 42, y: 78 }]),
+  ],
 };
 
 // The props are deliberately sparse and sit in open build areas. Their tile
@@ -137,6 +178,14 @@ const MAP_OBSTACLES: Record<MapId, MapObstacle[]> = {
     { x: 41, y: 62, width: 5, height: 4, kind: 'pins' }, { x: 11, y: 70, width: 4, height: 4, kind: 'pins' },
     { x: 51, y: 74, width: 4, height: 4, kind: 'pins' },
   ],
+  'overflowing-silos': [{ x: 5, y: 5, width: 5, height: 5, kind: 'crate' }, { x: 52, y: 9, width: 6, height: 6, kind: 'crate' }, { x: 7, y: 63, width: 5, height: 5, kind: 'crate' }],
+  'obsidian-foundries': [{ x: 5, y: 12, width: 8, height: 8, kind: 'grill' }, { x: 47, y: 23, width: 8, height: 8, kind: 'grill' }, { x: 3, y: 61, width: 8, height: 8, kind: 'crate' }],
+  'chrono-stitched-ruin': [{ x: 12, y: 22, width: 6, height: 6, kind: 'book' }, { x: 39, y: 8, width: 7, height: 6, kind: 'pins' }, { x: 22, y: 53, width: 8, height: 7, kind: 'book' }],
+  'world-engine-bastion': [{ x: 4, y: 6, width: 8, height: 8, kind: 'pins' }, { x: 51, y: 7, width: 8, height: 8, kind: 'pins' }, { x: 4, y: 58, width: 8, height: 8, kind: 'crate' }, { x: 53, y: 57, width: 8, height: 8, kind: 'crate' }],
+  'core-meltdown-vent': [{ x: 17, y: 8, width: 13, height: 16, kind: 'grill' }, { x: 35, y: 46, width: 13, height: 16, kind: 'grill' }],
+  'bio-vascular-spire': [{ x: 13, y: 34, width: 9, height: 9, kind: 'pins' }, { x: 42, y: 35, width: 9, height: 9, kind: 'pins' }, { x: 26, y: 56, width: 8, height: 8, kind: 'crate' }],
+  'abyssal-trench': [{ x: 4, y: 6, width: 9, height: 10, kind: 'crate' }, { x: 43, y: 4, width: 10, height: 10, kind: 'crate' }, { x: 18, y: 56, width: 8, height: 8, kind: 'pins' }, { x: 54, y: 55, width: 7, height: 9, kind: 'crate' }],
+  'alchemists-crucible': [{ x: 13, y: 5, width: 8, height: 8, kind: 'crate' }, { x: 42, y: 5, width: 8, height: 8, kind: 'crate' }, { x: 12, y: 34, width: 8, height: 8, kind: 'grill' }, { x: 43, y: 34, width: 8, height: 8, kind: 'grill' }],
 };
 
 export function getMap(id: MapId): MapSpec { return MAPS.find((map) => map.id === id)!; }
@@ -146,7 +195,17 @@ export function createMapRoute(id: MapId, variant: MapRouteVariant = 'main'): Ti
     return routeFrom([{ x: 63, y: 20 }, { x: 32, y: 20 }, { x: 32, y: 79 }]);
   }
   if (id === 'split-fork') return [...SPLIT_ROUTES[variant === 'right' ? 'right' : 'left']];
-  return [...ROUTES[id]];
+  const routes = MULTI_ROUTES[id];
+  if (routes) return [...routes[variant === 'right' ? Math.min(1, routes.length - 1) : 0]!];
+  return [...ROUTES[id]!];
+}
+
+/** All independently spawned lanes for a map, with shared segments duplicated per route. */
+export function createMapRoutes(id: MapId): Tile[][] {
+  if (id === 'dual-spawn-convergence') return [createMapRoute(id, 'main'), createMapRoute(id, 'right')];
+  if (id === 'split-fork') return [createMapRoute(id, 'left'), createMapRoute(id, 'right')];
+  const routes = MULTI_ROUTES[id];
+  return routes ? routes.map((route) => [...route]) : [createMapRoute(id)];
 }
 
 export function getMapObstacles(id: MapId): MapObstacle[] { return MAP_OBSTACLES[id].map((obstacle) => ({ ...obstacle })); }
