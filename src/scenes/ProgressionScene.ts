@@ -216,7 +216,9 @@ export class ProgressionScene extends Phaser.Scene {
       const x = 65 + col * 260;
       const y = 188 + row * 66;
       const card = this.add.rectangle(x + 120, y + 20, 238, 54, 0x201e40).setStrokeStyle(1, 0x625e9a).setInteractive({ useHandCursor: true }).setData('tab', 'mastery');
-      const label = this.add.text(x + 14, y + 8, '', { fontFamily: 'Arial', fontSize: '12px', color: C.cream, fontStyle: 'bold', wordWrap: { width: 214 }, maxLines: 2, lineSpacing: 1 }).setData('tab', 'mastery');
+      // Long Champion names can wrap to two lines, leaving the third visible
+      // line for their unlock requirement without needing to select the card.
+      const label = this.add.text(x + 14, y + 6, '', { fontFamily: 'Arial', fontSize: '11px', color: C.cream, fontStyle: 'bold', wordWrap: { width: 214 }, maxLines: 3, lineSpacing: 1 }).setData('tab', 'mastery');
       const levelUpAlert = this.add.text(x + 224, y + 4, '!', { fontFamily: 'Arial', fontSize: '18px', color: C.pink, fontStyle: 'bold', stroke: C.ink, strokeThickness: 3 }).setOrigin(0.5, 0).setVisible(false).setData('tab', 'mastery');
       const select = (pointer?: Phaser.Input.Pointer) => {
         if (pointer && (pointer.y < 180 || pointer.y > 660 || pointer.x < 48 || pointer.x > 563)) return;

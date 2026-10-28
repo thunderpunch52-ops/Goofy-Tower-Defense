@@ -41,6 +41,9 @@ export const MAPS: MapSpec[] = [
   { id: 'alchemists-crucible', number: 17, name: "The Alchemist's Crucible", category: 'Ascended', theme: 'Necro-Alchemist vault laboratory', ground: 0x403746, road: 0xd0b776, unlockCost: 10, startsUnlocked: false },
 ];
 
+const MAP_CATEGORY_ORDER: MapSpec['category'][] = ['Beginner', 'Advanced', 'Expert', 'Ascended'];
+MAPS.sort((a, b) => MAP_CATEGORY_ORDER.indexOf(a.category) - MAP_CATEGORY_ORDER.indexOf(b.category) || a.number - b.number);
+
 export const CAMPAIGN_MAPS: Record<number, MapId> = {
   1: 'simple-loop', 2: 'open-rectangular', 3: 'dual-u-turn', 4: 'zig-zag-cascade', 5: 'dual-spawn-convergence',
 };
