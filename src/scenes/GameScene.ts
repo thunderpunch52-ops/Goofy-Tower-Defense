@@ -311,9 +311,11 @@ export class GameScene extends Phaser.Scene {
     const requestedMap = activeOdysseyNode?.mapId ?? this.registry.get('selectedMapId') as MapId | undefined;
     this.campaignStage = Phaser.Math.Clamp(Math.floor(Number(this.registry.get('campaignStage') ?? 1)), 1, 5);
     this.mapId = (this.mapPreview || this.endlessMode || this.odysseyMode) && MAPS.some((map) => map.id === requestedMap) ? requestedMap! : CAMPAIGN_MAPS[this.campaignStage]!;
+    const mapStartingCoins = this.mapId === 'core-meltdown-vent' ? 2500 : 450;
+    if (this.mapId === 'core-meltdown-vent') this.coins = mapStartingCoins;
     if (this.odysseyMode && this.odysseyState) {
       this.baseHealth = this.odysseyState.baseHealth;
-      this.coins = 450 + Math.min(1500, this.odysseyState.carryCoins);
+      this.coins = mapStartingCoins + Math.min(1500, this.odysseyState.carryCoins);
       this.runMasteryXp = new Map(Object.entries(this.odysseyState.vaultMastery));
       for (const id of [...(activeOdysseyNode?.mutationIds ?? [activeOdysseyNode?.mutationId]), activeOdysseyNode?.branchMutationId]) {
         const mutation = CAMPAIGN_MUTATIONS.find((item) => item.id === id);
@@ -839,7 +841,7 @@ export class GameScene extends Phaser.Scene {
       'world-engine-bastion': 'EVERY 5 WAVES · SECTOR SHIFT · FULL TOWER REFUNDS',
       'core-meltdown-vent': 'HOT GROUND · COOLING COSTS $50 PER NEW TILE',
       'bio-vascular-spire': 'ENEMIES REGENERATE 5% HP/SEC WITHOUT ACTIVE DOT',
-      'abyssal-trench': 'WATER BLOCKED · −20% SPEED BY ROAD · CRUSHERS COVER 4 TILES',
+      'abyssal-trench': 'DARK BLUE = DEEP WATER · NO BUILDING · −20% SPEED BY ROAD',
       'alchemists-crucible': 'UPGRADES COST +50% AFTER EACH 5 CLEARED WAVES',
     };
     if (mapRule[this.mapId]) this.add.text(68, 103, mapRule[this.mapId]!, { fontFamily: 'Arial', fontSize: '9px', color: '#f4c86a', fontStyle: 'bold', wordWrap: { width: 300 }, maxLines: 1 });
@@ -895,6 +897,7 @@ export class GameScene extends Phaser.Scene {
     const map = getMap(this.mapId);
     graphics.fillStyle(map.ground, 1).fillRect(BOARD.x, BOARD.y, boardWidth, boardHeight);
     this.drawMapSurface(graphics);
+    if (this.mapId === 'abyssal-trench') this.drawAbyssalWater(graphics);
     // Keep the grid on the ground only. Drawing it after the road makes
     // every tile seam look like a break in the widened route.
     graphics.lineStyle(1, COLORS.grid, 0.18);
@@ -1040,6 +1043,39 @@ export class GameScene extends Phaser.Scene {
       graphics.fillStyle(0x63dcff, 0.2).fillRect(px + 0.5, py + 0.5, BOARD.cell - 1, BOARD.cell - 1);
       graphics.lineStyle(0.55, 0x9df4ff, 0.62).strokeRect(px + 1, py + 1, BOARD.cell - 2, BOARD.cell - 2);
       graphics.lineStyle(0.45, 0xe5fcff, 0.34).lineBetween(px + 1, py + BOARD.cell - 1, px + BOARD.cell - 1, py + 1);
+    }
+  }
+
+  /** Clearly marks the unbuildable deep-water tiles around the trench. */
+  private drawAbyssalWater(graphics: Phaser.GameObjects.Graphics): void {
+    const buildShoalDistance = 9;
+    graphics.fillStyle(0x073149, 0.9);
+    for (let y = 0; y < BOARD_ROWS; y += 1) for (let x = 0; x < BOARD_COLUMNS; x += 1) {
+      const tile = { x, y };
+      const key = routeKey(tile);
+      if (this.roadTiles.has(key) || this.tileTouchesRoad(tile, buildShoalDistance)) continue;
+      const px = BOARD.x + x * BOARD.cell;
+      const py = BOARD.y + y * BOARD.cell;
+      graphics.fillRect(px, py, BOARD.cell, BOARD.cell);
+      // Small current marks make the blocked region read as water at normal zoom.
+      if ((x * 7 + y * 11) % 19 === 0) {
+        graphics.lineStyle(0.8, 0x48b9d4, 0.48).lineBetween(px + 1.5, py + BOARD.cell * 0.55, px + BOARD.cell - 1.5, py + BOARD.cell * 0.55);
+      }
+      if ((x * 13 + y * 5) % 37 === 0) {
+        graphics.lineStyle(0.65, 0x8be8f3, 0.38).strokeCircle(px + BOARD.cell * 0.68, py + BOARD.cell * 0.34, 1.1);
+      }
+    }
+    // A bright, broken shoreline outlines the area where construction is allowed.
+    graphics.lineStyle(1.3, 0x54cee5, 0.72);
+    for (let y = 0; y < BOARD_ROWS; y += 1) for (let x = 0; x < BOARD_COLUMNS; x += 1) {
+      const tile = { x, y };
+      if (!this.tileTouchesRoad(tile, buildShoalDistance)) continue;
+      const px = BOARD.x + x * BOARD.cell;
+      const py = BOARD.y + y * BOARD.cell;
+      if (y === 0 || !this.tileTouchesRoad({ x, y: y - 1 }, buildShoalDistance)) graphics.lineBetween(px, py, px + BOARD.cell, py);
+      if (y === BOARD_ROWS - 1 || !this.tileTouchesRoad({ x, y: y + 1 }, buildShoalDistance)) graphics.lineBetween(px, py + BOARD.cell, px + BOARD.cell, py + BOARD.cell);
+      if (x === 0 || !this.tileTouchesRoad({ x: x - 1, y }, buildShoalDistance)) graphics.lineBetween(px, py, px, py + BOARD.cell);
+      if (x === BOARD_COLUMNS - 1 || !this.tileTouchesRoad({ x: x + 1, y }, buildShoalDistance)) graphics.lineBetween(px + BOARD.cell, py, px + BOARD.cell, py + BOARD.cell);
     }
   }
 
@@ -1619,6 +1655,12 @@ export class GameScene extends Phaser.Scene {
       button.on('pointerover', () => button.setFillStyle(0x3c4d67));
       button.on('pointerout', () => button.setFillStyle(0x263447));
       button.on('pointerdown', () => {
+        const championAlreadyPlaced = spec.rarity === 'Champion' && this.towers.some((tower) => tower.spec.rarity === 'Champion');
+        const sameChampionPlaced = championAlreadyPlaced && this.towers.some((tower) => tower.spec.id === spec.id);
+        if (championAlreadyPlaced && !sameChampionPlaced) {
+          this.towerGridHint?.setText('🔒 Only one Champion tower can be placed at a time. Sell it to choose another.');
+          return;
+        }
         const unlock = this.towerUnlockState(spec);
         if (this.draftMode === 'none' && !unlock.unlocked) {
           this.towerGridHint?.setText(`🔒 ${spec.name}: ${unlock.requirement}`);
@@ -1765,13 +1807,16 @@ export class GameScene extends Phaser.Scene {
       card.title.setPosition(x + 3, y - 16);
       card.meta.setPosition(x, y + 15);
       const locked = this.draftMode === 'none' && !this.towerUnlockState(spec).unlocked;
-      card.lock.setVisible(locked);
-      card.lockText.setVisible(locked).setPosition(x, y + 1);
-      if (locked) {
+      const championLimit = spec.rarity === 'Champion'
+        && this.towers.some((tower) => tower.spec.rarity === 'Champion' && tower.spec.id !== spec.id);
+      const showLock = locked || championLimit;
+      card.lock.setVisible(showLock);
+      card.lockText.setVisible(showLock).setText(championLimit ? 'ONE CHAMPION LIMIT' : 'LOCKED').setPosition(x + 10, y + 1);
+      if (showLock) {
         card.lock.fillStyle(0x101820, 0.68).fillRoundedRect(x - 71, y - 33, 142, 65, 8);
-        card.lock.lineStyle(2, 0xef7e9c, 0.95).strokeRoundedRect(x - 71, y - 33, 142, 65, 8);
-        card.lock.lineStyle(2.4, 0xfff1f4, 1).strokeCircle(x, y - 3, 7);
-        card.lock.fillStyle(0xfff1f4, 1).fillRoundedRect(x - 8, y - 3, 16, 13, 2);
+        card.lock.lineStyle(2, championLimit ? 0xf4c86a : 0xef7e9c, 0.95).strokeRoundedRect(x - 71, y - 33, 142, 65, 8);
+        card.lock.lineStyle(2.4, 0xfff1f4, 1).strokeCircle(x - 43, y - 3, 7);
+        card.lock.fillStyle(0xfff1f4, 1).fillRoundedRect(x - 51, y - 3, 16, 13, 2);
       }
     }
 
@@ -6148,7 +6193,7 @@ export class GameScene extends Phaser.Scene {
         const cell = { x: tile.x + dx, y: tile.y + dy };
         const key = routeKey(cell);
         if (cell.x < 0 || cell.x >= BOARD_COLUMNS || cell.y < 0 || cell.y >= BOARD_ROWS || this.roadTiles.has(key) || this.obstacleTiles.has(key) || this.towerObjects.has(key)) return false;
-        if (this.mapId === 'abyssal-trench' && !this.tileTouchesRoad(cell, 5)) return false;
+        if (this.mapId === 'abyssal-trench' && !this.tileTouchesRoad(cell, 9)) return false;
       }
     }
     if (spec.id === 'lawnAerator') {
@@ -6527,7 +6572,10 @@ export class GameScene extends Phaser.Scene {
   }
 
   private updateHUD(): void {
-    this.waveLabel?.setText(this.endlessMode ? `Wave ${this.wave || 1}` : `${Math.min(this.wave || 1, this.totalWaves)} / ${this.totalWaves}`);
+    const currentWave = this.wave || 1;
+    this.waveLabel?.setText(this.endlessMode && !this.endlessOdysseyMode
+      ? `Wave ${currentWave}`
+      : `${Math.min(currentWave, this.totalWaves)} / ${this.totalWaves}`);
     this.healthLabel?.setText(`${this.baseHealth} / 100`).setColor(this.baseHealth <= 30 ? '#ef7e70' : '#f6f1df');
     this.coinLabel?.setText(`$${this.coins}`);
     this.statusLabel?.setText(this.gridFeedback || this.phaseMessage());
