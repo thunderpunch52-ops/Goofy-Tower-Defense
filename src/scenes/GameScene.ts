@@ -492,12 +492,21 @@ export class GameScene extends Phaser.Scene {
   }
   private placementCostAt(tile: Tile, spec: TowerSpec = this.currentTowerSpec): number {
     const base = this.mysteryPlacing ? 0 : this.basePlacementCost(spec);
-    if (this.mapId !== 'core-meltdown-vent') return base;
+    const center = { x: tile.x + spec.footprint / 2, y: tile.y + spec.footprint / 2 };
+    const championDiscount = this.towers.reduce((discount, champion) => {
+      if (champion.spec.id !== 'necroAlchemistCore') return discount;
+      const rank = champion.ranks[2]!;
+      const radius = rank >= 10 ? 6 : 4;
+      if (rank < 2 || Math.hypot(this.towerGridCenter(champion).x - center.x, this.towerGridCenter(champion).y - center.y) > radius) return discount;
+      return Math.max(discount, rank >= 9 ? 0.4 : rank >= 6 ? 0.3 : rank >= 4 ? 0.2 : 0.1);
+    }, 0);
+    const discountedBase = Math.ceil(base * (1 - championDiscount) / 10) * 10;
+    if (this.mapId !== 'core-meltdown-vent') return discountedBase;
     let hotTiles = 0;
     for (let dx = 0; dx < spec.footprint; dx += 1) for (let dy = 0; dy < spec.footprint; dy += 1) {
       if (!this.cooledTiles.has(routeKey({ x: tile.x + dx, y: tile.y + dy }))) hotTiles += 1;
     }
-    return base + hotTiles * 50;
+    return discountedBase + hotTiles * 50;
   }
 
   private panBoardWithKeys(deltaSeconds: number): void {
@@ -1935,6 +1944,13 @@ export class GameScene extends Phaser.Scene {
     this.phase = 'countdown';
     this.run.phase = 'preparation';
     this.run.baseHealth = this.baseHealth;
+    for (const leviathan of this.towers) if (leviathan.spec.id === 'leviathanSubCore' && leviathan.ranks[2]! >= 6) {
+      this.coins += leviathan.ranks[2]! >= 10 ? 1000 : 500;
+    }
+    for (const hive of this.towers) if (hive.spec.id === 'genesisWeaver' && hive.ranks[1]! >= 6) {
+      this.baseHealth = Math.min(hive.ranks[1]! >= 9 ? 150 : 100, this.baseHealth + (hive.ranks[1]! >= 9 ? 15 : 5));
+      this.run.baseHealth = this.baseHealth;
+    }
     this.run.coins = this.coins;
     this.gridFeedback = '';
     this.waveTotalHp = this.enemies.reduce((total, enemy) => total + (enemy.alive ? enemy.hp : 0), 0);
@@ -2189,6 +2205,7 @@ export class GameScene extends Phaser.Scene {
       if (enemy.alive && this.mapId === 'bio-vascular-spire') {
         const takingContinuousDamage = (this.simTime <= enemy.burnUntil && enemy.burnDps > 0)
           || (this.simTime < enemy.guanoPoisonUntil && enemy.guanoPoisonStacks > 0)
+          || (enemy.passiveStacks.get('healing-block') ?? 0) > this.simTime
           || this.trackResidues.some((residue) => residue.damagePerSecond > 0 && this.simTime < residue.expiresAt
             && residue.route === enemy.route && Math.abs(enemy.pathProgress - residue.progress) <= 0.62);
         if (!takingContinuousDamage && enemy.hp < enemy.maxHp) {
@@ -2584,8 +2601,31 @@ export class GameScene extends Phaser.Scene {
     for (const tower of this.towers) {
       const center = this.towerCenter(tower.tile, tower.spec);
       if (Phaser.Math.Distance.Between(x, y, center.x, center.y) <= radiusPx) {
-        if (tower.shieldHp > 0) { tower.shieldHp = 0; continue; }
-        tower.disabledUntil = Math.max(tower.disabledUntil, this.simTime + seconds);
+        if (tower.shieldHp > 0) {
+          tower.shieldHp = 0;
+          for (const aegis of this.towers.filter((candidate) => candidate.spec.id === 'aegisPrime' && candidate.ranks[1]! >= 8)) {
+            const aegisCenter = this.towerCenter(aegis.tile, aegis.spec);
+            if (Phaser.Math.Distance.Between(center.x, center.y, aegisCenter.x, aegisCenter.y) > 12 * BOARD.cell) continue;
+            this.showTowerStunWave(center.x, center.y, 6);
+            for (const ally of this.towers) {
+              const allyCenter = this.towerCenter(ally.tile, ally.spec);
+              if (Phaser.Math.Distance.Between(center.x, center.y, allyCenter.x, allyCenter.y) > 6 * BOARD.cell) continue;
+              ally.disabledUntil = Math.min(ally.disabledUntil, this.simTime);
+              ally.siphonSlowUntil = 0; ally.siphonSlowAmount = 0; ally.stunHitUntil = 0;
+            }
+          }
+          continue;
+        }
+        const aegis = this.towers.find((champion) => champion.spec.id === 'aegisPrime' && champion.ranks[1]! > 0
+          && Phaser.Math.Distance.Between(center.x, center.y, this.towerCenter(champion.tile, champion.spec).x, this.towerCenter(champion.tile, champion.spec).y)
+            <= (champion.ranks[1]! >= 7 ? 12 : champion.ranks[1]! >= 3 ? 10 : 8) * BOARD.cell);
+        if (aegis && aegis.ranks[1]! >= 10) continue;
+        if (aegis && aegis.ranks[1]! >= 9 && seconds <= 2) continue;
+        const reduction = aegis ? aegis.ranks[1]! >= 5 ? 0.6 : aegis.ranks[1]! >= 2 ? 0.35 : 0.2 : 0;
+        const sanctuary = this.towers.some((champion) => champion.spec.id === 'necroAlchemistCore' && champion.ranks[2]! >= 10
+          && Math.hypot(this.towerGridCenter(champion).x - this.towerGridCenter(tower).x, this.towerGridCenter(champion).y - this.towerGridCenter(tower).y) <= 6);
+        if (sanctuary) continue;
+        tower.disabledUntil = Math.max(tower.disabledUntil, this.simTime + seconds * (1 - reduction));
         tower.stunHitUntil = Math.max(tower.stunHitUntil, this.simTime + 1.1);
         affected.push(tower);
       }
@@ -2765,7 +2805,8 @@ export class GameScene extends Phaser.Scene {
     const trap = /gum|stuck|capture|trap|stop one enemy/.test(description) || tower.spec.id === 'glueCannon' && tower.ranks[1]! >= 7;
     const tint = burn ? 0xff8b43 : slow ? 0x71dcf4 : trap ? 0xd7a6f2 : 0xa7e65a;
     const specifiedDuration = Number(description.match(/(?:for|lasts? for)\s+(\d+(?:\.\d+)?)\s*(?:s|seconds?)/)?.[1] ?? 0);
-    const duration = /rest of the game|rest of its lifespan/.test(description) ? 600 : specifiedDuration || 6;
+    const duration = tower.spec.id === 'prometheus' && tower.ranks[0]! >= 10 ? 600
+      : /rest of the game|rest of its lifespan/.test(description) ? 600 : specifiedDuration || 6;
     const gumCoating = /coats\s+10 track tiles/.test(description);
     if (gumCoating && tower.passiveUpgradeTimers.has('gum-track-laid')) return;
     if (gumCoating) tower.passiveUpgradeTimers.set('gum-track-laid', Number.POSITIVE_INFINITY);
@@ -2789,7 +2830,17 @@ export class GameScene extends Phaser.Scene {
         slow: tower.spec.id === 'glueCannon' ? (tower.ranks[1]! >= 3 ? 0.6 : 0.5) : slow ? (/60%/.test(description) ? 0.6 : /50%/.test(description) ? 0.5 : 0.3) : 0,
         burn, armorShred, hyperarmorShred,
         damageTaken: /take\s+\d+%?\s+more damage/.test(description),
-        damagePerSecond: tower.spec.id === 'laserOfficePrinter' && tower.ranks[1]! >= 3 ? 15
+        damagePerSecond: tower.spec.id === 'prometheus' && tower.ranks[0]! >= 10 ? 1200
+          : tower.spec.id === 'prometheus' && tower.ranks[0]! >= 9 ? 4500
+            : tower.spec.id === 'prometheus' && tower.ranks[0]! >= 8 ? 2800
+              : tower.spec.id === 'prometheus' && tower.ranks[0]! >= 7 ? 1600
+                : tower.spec.id === 'prometheus' && tower.ranks[0]! >= 6 ? 900
+                  : tower.spec.id === 'prometheus' && tower.ranks[0]! >= 5 ? 500
+                    : tower.spec.id === 'prometheus' && tower.ranks[0]! >= 4 ? 280
+                      : tower.spec.id === 'prometheus' && tower.ranks[0]! >= 2 ? 120
+                        : tower.spec.id === 'prometheus' && tower.ranks[0]! >= 1 ? 50
+          : tower.spec.id === 'genesisWeaver' && tower.ranks[2]! >= 8 ? 1000
+          : tower.spec.id === 'laserOfficePrinter' && tower.ranks[1]! >= 3 ? 15
           : tower.spec.id === 'teslaCoilLamp' && tower.ranks[2]! >= 1 ? 18
             : tower.spec.id === 'glueCannon' && tower.ranks[0]! >= 1 ? 40 : 0,
         explode: /explode when expiring/.test(description), trap, hitEnemyIds: new Set<number>() });
@@ -2848,7 +2899,9 @@ export class GameScene extends Phaser.Scene {
         if (residue.damageTaken) { enemy.damageTakenMultiplier = Math.max(enemy.damageTakenMultiplier, 1.25); enemy.damageTakenUntil = Math.max(enemy.damageTakenUntil, this.simTime + 1); }
         if (residue.damagePerSecond > 0) this.damageEnemy(enemy, residue.tower, residue.damagePerSecond * 0.5);
         if (residue.burn) {
-          const dps = Math.max(2, residue.tower.spec.damage * residue.tower.damageMultiplier * 0.2);
+          const dps = residue.tower.spec.id === 'prometheus'
+            ? residue.tower.ranks[0]! >= 10 ? 1200 : residue.tower.ranks[0]! >= 9 ? 4500 : residue.tower.ranks[0]! >= 8 ? 2800 : residue.tower.ranks[0]! >= 7 ? 1600 : residue.tower.ranks[0]! >= 6 ? 900 : residue.tower.ranks[0]! >= 5 ? 500 : residue.tower.ranks[0]! >= 4 ? 280 : residue.tower.ranks[0]! >= 2 ? 120 : 50
+            : Math.max(2, residue.tower.spec.damage * residue.tower.damageMultiplier * 0.2);
           if (dps >= enemy.burnDps) enemy.burnSource = residue.tower;
           enemy.burnDps = Math.max(enemy.burnDps, dps);
           enemy.burnUntil = Math.max(enemy.burnUntil, this.simTime + 1.2 * this.statusDurationMultiplier());
@@ -3420,6 +3473,298 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  /** Active Champion path effects. Kept separate from basic shots so every
+   * persistent path upgrade continues ticking even when its tower has no target. */
+  private stepChampionSystems(tower: PlacedTower, dt: number): void {
+    const [p1, p2, p3] = tower.ranks;
+    if (tower.spec.rarity !== 'Champion') return;
+    const center = this.towerGridCenter(tower);
+    const inRange = (range = tower.spec.range * tower.rangeMultiplier) => this.enemies.filter((enemy) => enemy.alive
+      && this.distanceToPathTiles(center, enemy.pathProgress, enemy.route) <= range * this.globalRangeMultiplier());
+    const ring = (color: number, radius: number, fillAlpha = 0.08) => {
+      const at = this.towerCenter(tower.tile, tower.spec);
+      const visual = this.addToBoard(this.add.circle(at.x, at.y, radius * BOARD.cell * 0.25, color, fillAlpha)
+        .setStrokeStyle(2, color, 0.95).setDepth(7));
+      this.tweens.add({ targets: visual, radius: radius * BOARD.cell, alpha: 0, duration: 420, onComplete: () => visual.destroy() });
+    };
+    const pulseDamage = (targets: ActiveEnemy[], damage: number, color: number, rewind = 0, cap = Number.POSITIVE_INFINITY) => {
+      if (!targets.length) return;
+      ring(color, Math.max(2, Math.min(12, tower.spec.range)));
+      for (const enemy of targets.slice(0, cap)) {
+        const x = enemy.sprite.x; const y = enemy.sprite.y;
+        const mark = this.addToBoard(this.add.circle(x, y, 2.5, color, 0.25).setStrokeStyle(1.3, color, 0.9).setDepth(7));
+        this.tweens.add({ targets: mark, radius: 8, alpha: 0, duration: 300, onComplete: () => mark.destroy() });
+        if (damage > 0) this.damageEnemy(enemy, tower, damage);
+        if (enemy.alive && rewind > 0 && !enemy.spec.boss) this.applyPushback(enemy, rewind);
+      }
+    };
+
+    if (tower.spec.id === 'aegisPrime') {
+      if (p2 > 0) {
+        const centerPx = this.towerCenter(tower.tile, tower.spec);
+        const radius = p2 >= 7 ? 12 : p2 >= 3 ? 10 : 8;
+        const shieldCap = p2 >= 9 ? 1200 : p2 >= 6 ? 600 : p2 >= 4 ? 300 : p2 >= 3 ? 150 : 0;
+        for (const nearby of this.towers) {
+          if (nearby === tower) continue;
+          const other = this.towerCenter(nearby.tile, nearby.spec);
+          if (Phaser.Math.Distance.Between(centerPx.x, centerPx.y, other.x, other.y) > radius * BOARD.cell) continue;
+          if (shieldCap > 0) {
+            const shieldKey = `aegis-shield:${nearby.tile.x}:${nearby.tile.y}`;
+            const previousCap = tower.passiveUpgradeTimers.get(shieldKey) ?? 0;
+            if (shieldCap > previousCap) {
+              nearby.shieldHp += shieldCap - previousCap;
+              tower.passiveUpgradeTimers.set(shieldKey, shieldCap);
+            }
+            const regen = p2 >= 4 && nearby.disabledUntil <= this.simTime ? 20 * dt : 0;
+            nearby.shieldHp = Math.min(shieldCap, nearby.shieldHp + regen);
+          }
+          if (p2 >= 5) nearby.attackSpeedMultiplier = Math.max(nearby.attackSpeedMultiplier, 1.15);
+          if (p2 >= 2) nearby.pigeonRangeAuraMultiplier = Math.max(nearby.pigeonRangeAuraMultiplier, 1.1);
+        }
+        if (Math.floor(this.simTime / 2) !== Math.floor((this.simTime - dt) / 2)) ring(0x75dfff, radius, 0.02);
+      }
+      if (p1 > 0) {
+        let timer = (tower.passiveUpgradeTimers.get('champion-aegis-rift') ?? 0) - dt;
+        if (timer <= 0) {
+          const interval = p1 >= 3 ? 3 : 4;
+          tower.passiveUpgradeTimers.set('champion-aegis-rift', interval);
+          let enemies = inRange().filter((enemy) => !enemy.spec.boss && (p1 >= 10 || !enemy.spec.miniboss));
+          if (p1 >= 8 && enemies.length) {
+            const centerTarget = this.chooseTarget(enemies, tower.priority)!;
+            enemies = enemies.filter((enemy) => Phaser.Math.Distance.Between(enemy.sprite.x, enemy.sprite.y, centerTarget.sprite.x, centerTarget.sprite.y) <= 4 * BOARD.cell);
+          }
+          const damage = p1 >= 8 ? 8500 : p1 >= 3 ? 2800 : 1500;
+          const maxTargets = p1 >= 8 ? enemies.length : p1 >= 7 ? 3 : p1 >= 3 ? 8 : 1;
+          pulseDamage(enemies, damage, 0x75dfff, p1 >= 5 ? 6 : p1 >= 2 ? 3.5 : 2, maxTargets);
+          for (const enemy of enemies.slice(0, maxTargets)) {
+            if (!enemy.alive) continue;
+            if (p1 >= 2) this.applySlow(enemy, 0.15, 2, tower);
+            if (p1 >= 9) {
+              this.applySlow(enemy, 0.6, 4, tower);
+              enemy.pathProgress = Math.max(0, enemy.pathProgress - 0.25);
+              this.positionEnemy(enemy);
+            }
+          }
+        } else tower.passiveUpgradeTimers.set('champion-aegis-rift', timer);
+      }
+      if (p1 >= 6) {
+        let timer = (tower.passiveUpgradeTimers.get('champion-aegis-sinkhole') ?? 0) - dt;
+        if (timer <= 0) {
+          tower.passiveUpgradeTimers.set('champion-aegis-sinkhole', 12);
+          const targets = inRange().filter((enemy) => enemy.alive && !enemy.spec.boss && !enemy.spec.miniboss
+            && (p1 >= 5 || enemy.spec.speed >= 1.5));
+          const selected = this.chooseTarget(targets, tower.priority);
+          if (selected) {
+            const swallowed = p1 >= 7 ? targets.slice(0, 3) : [selected];
+            this.drawScreenWave(tower);
+            for (const enemy of swallowed) {
+              if (this.simTime < enemy.pushImmuneUntil) continue;
+              enemy.pathProgress = Math.max(0, enemy.pathProgress - (p1 >= 7 ? 15 : 10));
+              enemy.pushImmuneUntil = this.simTime + 0.8;
+              this.positionEnemy(enemy);
+              this.drawChampionStatus(enemy, 0x9e77ff);
+            }
+          }
+        } else tower.passiveUpgradeTimers.set('champion-aegis-sinkhole', timer);
+      }
+      if (p1 >= 10) {
+        let timer = (tower.passiveUpgradeTimers.get('champion-aegis-fold') ?? 0) - dt;
+        if (timer <= 0) {
+          tower.passiveUpgradeTimers.set('champion-aegis-fold', 40);
+          const targets = this.enemies.filter((enemy) => enemy.alive && !enemy.spec.boss);
+          pulseDamage(targets, 8500, 0x9e77ff, 20);
+          for (const enemy of targets) if (enemy.spec.miniboss && this.simTime >= enemy.pushImmuneUntil) {
+            enemy.pathProgress = Math.max(0, enemy.pathProgress - 20);
+            enemy.pushImmuneUntil = this.simTime + 0.8;
+            this.positionEnemy(enemy);
+          }
+          const recycle = targets.reduce((sum, enemy) => sum + Math.floor(starScaledBounty(enemy.spec.bounty, this.star) * 0.5), 0);
+          this.coins += recycle; this.run.coins = this.coins;
+        } else tower.passiveUpgradeTimers.set('champion-aegis-fold', timer);
+      }
+      if (p3 > 0) {
+        let timer = (tower.passiveUpgradeTimers.get('champion-aegis-collapse') ?? 0) - dt;
+        if (timer <= 0) {
+          const interval = p3 >= 10 ? 30 : p3 >= 8 ? 5 : p3 >= 4 ? 7 : 10;
+          tower.passiveUpgradeTimers.set('champion-aegis-collapse', interval);
+          const targets = p3 >= 10 ? this.enemies.filter((enemy) => enemy.alive)
+            : inRange(p3 >= 5 ? 10 : 6);
+          const damage = p3 >= 10 ? 25000 : p3 >= 9 ? 10000 : p3 >= 7 ? 5000 : p3 >= 5 ? 2200 : p3 >= 2 ? 800 : 0;
+          pulseDamage(targets.filter((enemy) => p3 >= 5 || (!enemy.spec.boss && !enemy.spec.miniboss)), damage, 0x8d69ed);
+          for (const enemy of targets) {
+            if (p3 >= 3) enemy.armorFlatShred = Math.max(enemy.armorFlatShred, enemy.spec.armor * (p3 >= 8 ? 0.75 : p3 >= 6 ? 0.5 : 0.1));
+            if (p3 >= 4) { enemy.hyperarmorShred = Math.max(enemy.hyperarmorShred, p3 >= 8 ? 0.75 : p3 >= 6 ? 0.5 : 0.25); enemy.hyperarmorShredUntil = this.simTime + 3600; }
+            if (p3 >= 7) { enemy.damageTakenMultiplier = Math.max(enemy.damageTakenMultiplier, 1.2); enemy.damageTakenUntil = this.simTime + 5; }
+            if (p3 >= 10) { enemy.armorFlatShred = Math.max(enemy.armorFlatShred, enemy.spec.armor); enemy.armorShred = 1; enemy.armorShredUntil = this.simTime + 12; }
+          }
+        } else tower.passiveUpgradeTimers.set('champion-aegis-collapse', timer);
+      }
+    }
+
+    if (tower.spec.id === 'prometheus') {
+      if (p1 > 0) {
+        let timer = (tower.passiveUpgradeTimers.get('champion-prometheus-lava') ?? 0) - dt;
+        if (timer <= 0) {
+          tower.passiveUpgradeTimers.set('champion-prometheus-lava', 1);
+          const targets = inRange(p1 >= 10 ? 8 : undefined);
+          ring(0xff6a35, p1 >= 10 ? 8 : 4, 0.12);
+          if (p1 >= 10) this.drawScreenWave(tower);
+          for (const enemy of targets) {
+            const dps = p1 >= 10 ? 1200 : p1 >= 9 ? 4500 : p1 >= 8 ? 2800 : p1 >= 7 ? 1600 : p1 >= 6 ? 900 : p1 >= 5 ? 500 : p1 >= 4 ? 280 : p1 >= 2 ? 120 : 50;
+            enemy.burnSource = tower; enemy.burnDps = Math.max(enemy.burnDps, dps * tower.damageMultiplier);
+            enemy.burnUntil = Math.max(enemy.burnUntil, this.simTime + (p1 >= 10 ? 3600 : 1.25));
+            if (p1 >= 3) enemy.armorFlatShred = Math.max(enemy.armorFlatShred, p1 >= 10 ? enemy.spec.armor : p1 >= 6 ? 15 : p1 >= 4 ? 8 : 3);
+            if (p1 >= 5) this.applySlow(enemy, p1 >= 7 ? 0.35 : 0.2, 1.2, tower);
+            if (p1 >= 10) enemy.speedBoostUntil = 0;
+            this.leaveTrackResidue(tower, enemy.pathProgress, enemy.route);
+            this.drawChampionStatus(enemy, 0xff6a35);
+          }
+        } else tower.passiveUpgradeTimers.set('champion-prometheus-lava', timer);
+      }
+      if (p3 >= 2) {
+        const range = p3 >= 6 ? 6 : 8;
+        const speedBonus = p3 >= 8 ? 0.6 : p3 >= 6 ? 0.45 : p3 >= 4 ? 0.3 : p3 >= 3 ? 0.2 : 0.1;
+        for (const nearby of this.towers) {
+          if (nearby === tower) continue;
+          const distance = Math.hypot(center.x - this.towerGridCenter(nearby).x, center.y - this.towerGridCenter(nearby).y);
+          if (distance > range) continue;
+          nearby.attackSpeedMultiplier = Math.max(nearby.attackSpeedMultiplier, 1 + speedBonus);
+          if (p3 >= 4) nearby.pigeonRangeAuraMultiplier = Math.max(nearby.pigeonRangeAuraMultiplier, 1.15);
+          if (p3 >= 6) nearby.damageAuraMultiplier = Math.max(nearby.damageAuraMultiplier, 1.2);
+        }
+      }
+    }
+
+    if (tower.spec.id === 'genesisWeaver') {
+      if (p1 >= 6) {
+        let timer = (tower.passiveUpgradeTimers.get('champion-genesis-cloud') ?? 0) - dt;
+        if (timer <= 0) {
+          tower.passiveUpgradeTimers.set('champion-genesis-cloud', 0.5);
+          const targets = p1 >= 10 ? inRange(Math.max(BOARD_COLUMNS, BOARD_ROWS)) : inRange(6);
+          if (targets.length) {
+            if (p1 >= 10) this.drawScreenWave(tower);
+            else ring(0x57f3a1, 6, 0.05);
+          }
+          for (const enemy of targets) {
+            this.damageEnemy(enemy, tower, (p1 >= 8 ? 800 : 350) * tower.damageMultiplier);
+            enemy.armorFlatShred = Math.max(enemy.armorFlatShred, p1 >= 5 ? 5 : 1);
+            enemy.hyperarmorShred = Math.max(enemy.hyperarmorShred, p1 >= 10 ? 1 : p1 >= 7 ? 0.3 : p1 >= 3 ? 0.05 : 0);
+            enemy.hyperarmorShredUntil = this.simTime + (p1 >= 10 ? 3600 : p1 >= 9 ? 3 : 1);
+            if (p1 >= 10 && (enemy.spec.boss || enemy.spec.miniboss)) enemy.megaShieldHp = Math.max(0, enemy.megaShieldHp - 500 * dt);
+            this.drawChampionStatus(enemy, 0x57f3a1);
+          }
+        } else tower.passiveUpgradeTimers.set('champion-genesis-cloud', timer);
+      }
+      if (p2 >= 3) {
+        const centerPx = this.towerCenter(tower.tile, tower.spec);
+        for (const nearby of this.towers) {
+          if (nearby === tower || Phaser.Math.Distance.Between(centerPx.x, centerPx.y, this.towerCenter(nearby.tile, nearby.spec).x, this.towerCenter(nearby.tile, nearby.spec).y) > 4 * BOARD.cell) continue;
+          const repairRate = p2 >= 5 ? 60 : 25;
+          nearby.shieldHp = Math.min(p2 >= 5 ? 200 : 100, nearby.shieldHp + repairRate * dt);
+        }
+      }
+      if (p3 >= 1) {
+        const targets = inRange();
+        for (const enemy of targets) {
+          const dps = p3 >= 9 ? 650 : p3 >= 7 ? 650 : p3 >= 5 ? 250 : p3 >= 3 ? 90 : 30;
+          enemy.burnSource = tower; enemy.burnDps = Math.max(enemy.burnDps, dps * tower.damageMultiplier);
+          enemy.burnUntil = Math.max(enemy.burnUntil, this.simTime + 1.2);
+          if (p3 >= 5) enemy.armorFlatShred = Math.max(enemy.armorFlatShred, 10);
+          if (p3 >= 6 && !enemy.spec.boss && enemy.hp <= enemy.maxHp * (p3 >= 9 ? 0.15 : p3 >= 7 ? 0.12 : 0.08)) this.damageEnemy(enemy, tower, enemy.hp + 1, true, false, undefined, true);
+          this.drawChampionStatus(enemy, 0x83ff74);
+        }
+      }
+    }
+
+    if (tower.spec.id === 'leviathanSubCore') {
+      if (p1 > 0) {
+        let timer = (tower.passiveUpgradeTimers.get('champion-leviathan-wave') ?? 0) - dt;
+        if (timer <= 0) {
+          const interval = p1 >= 9 ? 3 : p1 >= 4 ? 4 : 5;
+          tower.passiveUpgradeTimers.set('champion-leviathan-wave', interval);
+          const targets = inRange();
+          pulseDamage(targets.filter((enemy) => !enemy.spec.boss), p1 >= 8 ? 14000 : p1 >= 6 ? 8000 : p1 >= 4 ? 4500 : p1 >= 1 ? 2000 : 0, 0x41c8ed,
+            p1 >= 7 ? 4 : p1 >= 5 ? 3 : p1 >= 3 ? 2 : 1, p1 >= 7 ? targets.length : p1 >= 3 ? 10 : 99);
+          for (const enemy of targets) {
+            enemy.wetUntil = this.simTime + (p1 >= 10 ? 3600 : 6);
+            if (p1 >= 6) enemy.armorFlatShred = Math.max(enemy.armorFlatShred, 20);
+            if (p1 >= 5) this.applySlow(enemy, 0.2, 2, tower);
+          }
+        } else tower.passiveUpgradeTimers.set('champion-leviathan-wave', timer);
+      }
+      if (p1 >= 10) {
+        let timer = (tower.passiveUpgradeTimers.get('champion-leviathan-tsunami') ?? 0) - dt;
+        if (timer <= 0) {
+          tower.passiveUpgradeTimers.set('champion-leviathan-tsunami', 20);
+          const targets = this.enemies.filter((enemy) => enemy.alive && !enemy.spec.boss);
+          this.drawScreenWave(tower);
+          for (const enemy of targets) {
+            this.applyPushback(enemy, 5);
+            enemy.wetUntil = this.simTime + 3600;
+            this.drawChampionStatus(enemy, 0x41c8ed);
+          }
+        } else tower.passiveUpgradeTimers.set('champion-leviathan-tsunami', timer);
+      }
+      if (p2 > 0) {
+        const radius = p2 >= 9 ? 12 : p2 >= 5 ? 8 : 6;
+        const targets = inRange(radius);
+        for (const enemy of targets) {
+          const slowCap = p2 >= 8 ? 0.75 : p2 >= 6 ? 0.65 : 0.5;
+          const slow = p2 >= 4 ? Math.min(slowCap, 0.3 + (enemy.passiveStacks.get(`leviathan:${tower.tile.x}:${tower.tile.y}`) ?? 0) * 0.1) : p2 >= 2 ? 0.3 : 0.2;
+          this.applySlow(enemy, slow, 0.3, tower);
+          enemy.passiveStacks.set(`leviathan:${tower.tile.x}:${tower.tile.y}`, Math.min(5, (enemy.passiveStacks.get(`leviathan:${tower.tile.x}:${tower.tile.y}`) ?? 0) + dt));
+          if (p2 >= 2) this.damageEnemy(enemy, tower, (p2 >= 9 ? 2500 : p2 >= 5 ? 600 : 200) * dt);
+          if (p2 >= 3) enemy.armorFlatShred = Math.max(enemy.armorFlatShred, p2 >= 7 ? 40 : 15);
+          if (p2 >= 6) this.damageEnemy(enemy, tower, enemy.maxHp * (p2 >= 10 && enemy.spec.hp >= 1000 ? 0.03 : p2 >= 8 ? 0.02 : 0.01) * dt, false, false, undefined, true);
+        }
+        if (targets.length && Math.floor(this.simTime * 2) !== Math.floor((this.simTime - dt) * 2)) ring(0x2db5e4, radius, 0.025);
+      }
+    }
+
+    if (tower.spec.id === 'necroAlchemistCore') {
+      if (p2 > 0) {
+        const radius = p2 >= 9 ? 12 : p2 >= 5 ? 8 : p2 >= 2 ? 6 : 4;
+        const targets = inRange(radius);
+        for (const enemy of targets) {
+          const dps = p2 >= 9 ? 3000 : p2 >= 7 ? 1200 : p2 >= 5 ? 500 : p2 >= 4 ? 220 : p2 >= 2 ? 90 : 40;
+          enemy.burnSource = tower; enemy.burnDps = Math.max(enemy.burnDps, dps * tower.damageMultiplier);
+          enemy.burnUntil = Math.max(enemy.burnUntil, this.simTime + 1.2);
+          enemy.passiveStacks.set('necro-gas-until', this.simTime + 1.2);
+          if (p2 >= 3) enemy.passiveStacks.set('healing-block', this.simTime + 1.5);
+          if (p2 >= 4) enemy.armorFlatShred = Math.max(enemy.armorFlatShred, 15);
+          if (p2 >= 6 && !enemy.spec.boss && enemy.hp <= enemy.maxHp * (p2 >= 10 ? 0.2 : p2 >= 7 ? 0.14 : 0.1)) this.damageEnemy(enemy, tower, enemy.hp + 1, true, false, undefined, true);
+          this.drawChampionStatus(enemy, 0x5bea86);
+        }
+        if (targets.length && Math.floor(this.simTime) !== Math.floor(this.simTime - dt)) ring(0x51ec79, radius, 0.025);
+      }
+      if (p3 >= 1) {
+        const centerPx = this.towerCenter(tower.tile, tower.spec);
+        const shield = p3 >= 9 ? 1000 : p3 >= 7 ? 1000 : p3 >= 5 ? 500 : p3 >= 3 ? 250 : 100;
+        for (const nearby of this.towers) {
+          if (nearby === tower) continue;
+          const other = this.towerCenter(nearby.tile, nearby.spec);
+          if (Phaser.Math.Distance.Between(centerPx.x, centerPx.y, other.x, other.y) > (p3 >= 10 ? 6 : 4) * BOARD.cell) continue;
+          const shieldKey = `necro-shield:${nearby.tile.x}:${nearby.tile.y}`;
+          const previousCapacity = tower.passiveUpgradeTimers.get(shieldKey) ?? 0;
+          if (shield > previousCapacity) {
+            nearby.shieldHp += shield - previousCapacity;
+            tower.passiveUpgradeTimers.set(shieldKey, shield);
+          }
+          const outOfCombat = inRange(4).length === 0;
+          nearby.shieldHp = Math.min(shield, nearby.shieldHp + dt * (p3 >= 3 && outOfCombat ? 25 : 0));
+          if (p3 >= 7) nearby.damageAuraMultiplier = Math.max(nearby.damageAuraMultiplier, 1.2);
+        }
+      }
+    }
+  }
+
+  private drawChampionStatus(enemy: ActiveEnemy, color: number): void {
+    if (!enemy.alive || Math.floor(this.simTime * 4) === Math.floor((this.simTime - 0.016) * 4)) return;
+    const visual = this.addToBoard(this.add.circle(enemy.sprite.x, enemy.sprite.y, enemy.sprite.radius + 2, color, 0.12)
+      .setStrokeStyle(1, color, 0.6).setDepth(6));
+    this.tweens.add({ targets: visual, alpha: 0, duration: 260, onComplete: () => visual.destroy() });
+  }
+
   private stepTowers(dt: number): void {
     const globalSpeedBase = this.globalAttackSpeedMultiplier();
     for (const tower of this.towers) {
@@ -3441,6 +3786,7 @@ export class GameScene extends Phaser.Scene {
       tower.art.setAlpha(disabled ? 0.4 : siphoned ? 0.75 : 1);
       tower.label.setAlpha(disabled ? 0.45 : siphoned ? 0.75 : 1);
       this.stepPassiveUpgradeEffects(tower, dt);
+      if (!disabled) this.stepChampionSystems(tower, dt);
       if (tower.spec.id === 'catLaserPointer') this.stepCatLaserPath(tower, dt);
       if (tower.spec.id === 'lawnAerator' && tower.ranks[1]! >= 7) {
         const ready = tower.passiveUpgradeTimers.get('aerator-full-rpm-ready') ?? this.simTime;
@@ -3499,6 +3845,7 @@ export class GameScene extends Phaser.Scene {
       }
       tower.cooldown -= dt * globalSpeed;
       const globalGnomeRange = (tower.spec.id === 'lawnDartGnome' && tower.ranks[0]! >= 7)
+        || (tower.spec.id === 'prometheus' && tower.ranks[1]! >= 9)
         || this.towers.some((support) => support.spec.id === 'sentientTrafficLight' && support.ranks[1]! >= 7
           && (support.passiveUpgradeTimers.get('traffic-active-until') ?? 0) > this.simTime);
       const candidates = this.enemies.filter((enemy) => enemy.alive && (globalGnomeRange
@@ -3510,13 +3857,24 @@ export class GameScene extends Phaser.Scene {
         tower.lastTargetId = target.id;
         tower.beamLockTime += dt;
         if (tower.cooldown > 0) continue;
-        const dps = Math.min(200, 10 + (tower.beamLockTime * tower.trackingMultiplier / 5) * 190);
+        let dps = Math.min(200, 10 + (tower.beamLockTime * tower.trackingMultiplier / 5) * 190);
+        if (tower.spec.id === 'prometheus') {
+          const rank = tower.ranks[1]!;
+          const tierDamage = rank >= 9 ? 8500 : rank >= 7 ? 4200 : rank >= 5 ? 1800 : rank >= 3 ? 800 : rank >= 1 ? 300 : tower.spec.damage;
+          const rampPerSecond = rank >= 5 ? 0.2 : rank >= 2 ? 0.1 : 0;
+          const rampCap = rank >= 10 ? Number.POSITIVE_INFINITY : rank >= 7 ? 4 : rank >= 5 ? 2 : rank >= 3 ? 1 : rank >= 2 ? 0.5 : 0;
+          dps = tierDamage * (1 + Math.min(rampCap, tower.beamLockTime * rampPerSecond));
+          if (rank >= 8) dps += target.maxHp * 0.02;
+        }
         const beamDamage = (dps / tower.spec.attackRate) * tower.damageMultiplier;
         const catSplitRank = tower.spec.id === 'catLaserPointer' ? tower.ranks[1]! : 0;
-        const splitLimit = catSplitRank >= 7 ? 10 : catSplitRank >= 5 ? 5 : catSplitRank >= 4 ? 4 : catSplitRank >= 3 ? 3 : 1;
+        const splitLimit = tower.spec.id === 'prometheus'
+          ? tower.ranks[1]! >= 6 ? 5 : tower.ranks[1]! >= 4 ? 3 : 1
+          : catSplitRank >= 7 ? 10 : catSplitRank >= 5 ? 5 : catSplitRank >= 4 ? 4 : catSplitRank >= 3 ? 3 : 1;
         const splitTargets = splitLimit > 1
           ? candidates.filter((enemy) => enemy !== target && enemy.alive
-            && Phaser.Math.Distance.Between(enemy.sprite.x, enemy.sprite.y, target.sprite.x, target.sprite.y) <= BOARD.cell * (catSplitRank >= 5 ? 5 : 3))
+            && (tower.spec.id === 'prometheus' ? enemy.route === target.route && Math.abs(enemy.pathProgress - target.pathProgress) <= 2
+              : Phaser.Math.Distance.Between(enemy.sprite.x, enemy.sprite.y, target.sprite.x, target.sprite.y) <= BOARD.cell * (catSplitRank >= 5 ? 5 : 3)))
             .sort((a, b) => Phaser.Math.Distance.Between(a.sprite.x, a.sprite.y, target.sprite.x, target.sprite.y)
               - Phaser.Math.Distance.Between(b.sprite.x, b.sprite.y, target.sprite.x, target.sprite.y)
               || b.pathProgress - a.pathProgress).slice(0, splitLimit - 1)
@@ -3524,7 +3882,7 @@ export class GameScene extends Phaser.Scene {
         // Draw secondary rays before damage can destroy a target's Phaser sprite.
         if (splitTargets.length) {
           const origin = this.towerCenter(tower.tile, tower.spec);
-          const colors = [0x71eaff, 0xff76c8, 0xffd45e, 0xa77bff];
+          const colors = tower.spec.id === 'prometheus' ? [0xff6a35, 0xffbd45, 0xffe28b, 0xff6a35] : [0x71eaff, 0xff76c8, 0xffd45e, 0xa77bff];
           for (let index = 0; index < splitTargets.length; index += 1) {
             const split = splitTargets[index]!;
             const previous = catSplitRank >= 5 && index > 0 ? splitTargets[index - 1]! : undefined;
@@ -3541,7 +3899,7 @@ export class GameScene extends Phaser.Scene {
           const split = splitTargets[index]!;
           if (!split.alive) continue;
           const splitPower = catSplitRank >= 7 ? 0.75 : 0.5;
-          this.damageEnemy(split, tower, beamDamage * splitPower);
+          this.damageEnemy(split, tower, beamDamage * (tower.spec.id === 'prometheus' ? 1 : splitPower));
           if (catSplitRank >= 6) {
             // The prism cycles fire, ice, and acid across split rays.
             if (index % 3 === 0) {
@@ -3561,22 +3919,24 @@ export class GameScene extends Phaser.Scene {
         this.drawRadialBurst(tower);
         for (const enemy of candidates) {
           this.damageEnemy(enemy, tower, tower.spec.damage * tower.damageMultiplier);
-          this.leaveTrackResidue(tower, enemy.pathProgress, enemy.route);
-          if (tower.ranks[0]! >= 4) { enemy.armorShred = Math.max(enemy.armorShred, 0.5); enemy.armorShredUntil = Math.max(enemy.armorShredUntil, this.simTime + 1); }
-          if (tower.ranks[0]! >= 6) { enemy.hyperarmorShred = 1; enemy.hyperarmorShredUntil = Math.max(enemy.hyperarmorShredUntil, this.simTime + 0.65); }
-          const stackKey = `microwave:${tower.tile.x},${tower.tile.y}`;
-          const stacks = tower.ranks[0]! >= 5 ? Math.min(8, (enemy.passiveStacks.get(stackKey) ?? 0) + 1) : 1;
-          enemy.passiveStacks.set(stackKey, stacks);
-          const burnDps = 5 * tower.damageMultiplier * (tower.ranks[0]! >= 3 ? 1.5 : 1) * stacks;
-          if (burnDps >= enemy.burnDps) enemy.burnSource = tower;
-          enemy.burnDps = Math.max(enemy.burnDps, burnDps * (tower.ranks[0]! >= 7 && stacks >= 8 ? 2 : 1));
-          enemy.burnUntil = Math.max(enemy.burnUntil, this.simTime + (tower.ranks[0]! >= 3 ? 8 : 5) * this.statusDurationMultiplier());
-          if (tower.ranks[2]! >= 1 && Math.random() < 0.05) this.applyStun(enemy, 0.5);
-          if (tower.ranks[2]! >= 2) this.applySlow(enemy, 0.25, 0.5, tower);
-          if (tower.ranks[2]! >= 4 && enemy.stunUntil > this.simTime) { enemy.damageTakenMultiplier = Math.max(enemy.damageTakenMultiplier, 1.3); enemy.damageTakenUntil = Math.max(enemy.damageTakenUntil, this.simTime + 1); }
-          if (tower.ranks[2]! >= 5 && enemy.spec.miniboss) this.applyStun(enemy, 1);
-          if (tower.ranks[2]! >= 6) this.applyStun(enemy, 1.5);
-          if (tower.ranks[1]! >= 3 && tower.shotCounter % 3 === 0 && enemy === this.chooseTarget(candidates, tower.priority)) {
+          if (tower.spec.id === 'sentientMicrowaveOven') {
+            this.leaveTrackResidue(tower, enemy.pathProgress, enemy.route);
+            if (tower.ranks[0]! >= 4) { enemy.armorShred = Math.max(enemy.armorShred, 0.5); enemy.armorShredUntil = Math.max(enemy.armorShredUntil, this.simTime + 1); }
+            if (tower.ranks[0]! >= 6) { enemy.hyperarmorShred = 1; enemy.hyperarmorShredUntil = Math.max(enemy.hyperarmorShredUntil, this.simTime + 0.65); }
+            const stackKey = `microwave:${tower.tile.x},${tower.tile.y}`;
+            const stacks = tower.ranks[0]! >= 5 ? Math.min(8, (enemy.passiveStacks.get(stackKey) ?? 0) + 1) : 1;
+            enemy.passiveStacks.set(stackKey, stacks);
+            const burnDps = 5 * tower.damageMultiplier * (tower.ranks[0]! >= 3 ? 1.5 : 1) * stacks;
+            if (burnDps >= enemy.burnDps) enemy.burnSource = tower;
+            enemy.burnDps = Math.max(enemy.burnDps, burnDps * (tower.ranks[0]! >= 7 && stacks >= 8 ? 2 : 1));
+            enemy.burnUntil = Math.max(enemy.burnUntil, this.simTime + (tower.ranks[0]! >= 3 ? 8 : 5) * this.statusDurationMultiplier());
+            if (tower.ranks[2]! >= 1 && Math.random() < 0.05) this.applyStun(enemy, 0.5);
+            if (tower.ranks[2]! >= 2) this.applySlow(enemy, 0.25, 0.5, tower);
+            if (tower.ranks[2]! >= 4 && enemy.stunUntil > this.simTime) { enemy.damageTakenMultiplier = Math.max(enemy.damageTakenMultiplier, 1.3); enemy.damageTakenUntil = Math.max(enemy.damageTakenUntil, this.simTime + 1); }
+            if (tower.ranks[2]! >= 5 && enemy.spec.miniboss) this.applyStun(enemy, 1);
+            if (tower.ranks[2]! >= 6) this.applyStun(enemy, 1.5);
+          }
+          if (tower.spec.id === 'sentientMicrowaveOven' && tower.ranks[1]! >= 3 && tower.shotCounter % 3 === 0 && enemy === this.chooseTarget(candidates, tower.priority)) {
             this.drawRadialBurst(tower);
             for (const nearby of candidates) {
               this.damageEnemy(nearby, tower, tower.spec.damage * tower.damageMultiplier);
@@ -4013,8 +4373,14 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     if (tower.spec.attackType === 'splash' || tower.spec.attackType === 'freeze') {
-      const radius = (tower.spec.attackType === 'freeze' ? 2 : 1.5) * tower.blastMultiplier * this.globalRangeMultiplier();
-      const area = candidates.filter((enemy) => Math.abs(enemy.pathProgress - target.pathProgress) <= radius);
+      const radius = (tower.spec.id === 'aegisPrime' ? 2.5 : tower.spec.attackType === 'freeze' ? 2 : 1.5) * tower.blastMultiplier * this.globalRangeMultiplier();
+      const area = candidates.filter((enemy) => tower.spec.id === 'aegisPrime'
+        ? Phaser.Math.Distance.Between(enemy.sprite.x, enemy.sprite.y, target.sprite.x, target.sprite.y) <= radius * BOARD.cell
+        : Math.abs(enemy.pathProgress - target.pathProgress) <= radius);
+      if (tower.spec.id === 'aegisPrime') {
+        const impact = this.addToBoard(this.add.circle(target.sprite.x, target.sprite.y, 3, 0x91dfff, 0.22).setStrokeStyle(2, 0xd8efff, 0.95).setDepth(7));
+        this.tweens.add({ targets: impact, radius: radius * BOARD.cell, alpha: 0, duration: 300, onComplete: () => impact.destroy() });
+      }
       for (const enemy of area) {
         this.damageEnemy(enemy, tower, damage, enemy === target);
         if (tower.spec.attackType === 'freeze') this.applySlow(enemy, 0.75, 1.5 * tower.slowDurationMultiplier, tower);
@@ -4024,13 +4390,23 @@ export class GameScene extends Phaser.Scene {
     }
     if (tower.spec.attackType === 'chain' || tower.spec.attackType === 'pierce') {
       const sorted = [...candidates].sort((a, b) => Math.abs(a.pathProgress - target.pathProgress) - Math.abs(b.pathProgress - target.pathProgress));
-      const targetCap = tower.spec.id === 'teslaCoilLamp'
+      const targetCap = tower.spec.id === 'genesisWeaver'
+        ? tower.ranks[0]! >= 8 ? 50 : tower.ranks[0]! >= 5 ? 35 : tower.ranks[0]! >= 2 ? 20 : tower.ranks[0]! >= 1 ? 15 : 10
+        : tower.spec.id === 'teslaCoilLamp'
         ? tower.ranks[0]! >= 7 ? 12 : tower.ranks[0]! >= 2 ? 8 : 4
         : this.upgradeTargetCap(tower, 3);
       const targets = sorted.slice(0, targetCap);
       targets.forEach((enemy, index) => {
         const fullTeslaDamage = tower.spec.id === 'teslaCoilLamp' && tower.ranks[0]! >= 2;
-        this.damageEnemy(enemy, tower, damage * (tower.spec.attackType === 'chain' && !fullTeslaDamage ? 0.8 ** index : 1));
+        const genesisRank = tower.ranks[0]!;
+        const genesisDamage = tower.spec.id === 'genesisWeaver'
+          ? genesisRank >= 8 ? 800 : genesisRank >= 6 ? 350 : genesisRank >= 3 ? 120 : genesisRank >= 1 ? 50 : 500
+          : damage;
+        // Each active nanite drone contributes its listed damage; chain falloff
+        // would silently make the advertised swarm count and damage inaccurate.
+        const chainFalloff = tower.spec.id === 'genesisWeaver' ? 1
+          : tower.spec.attackType === 'chain' && !fullTeslaDamage ? 0.8 ** index : 1;
+        this.damageEnemy(enemy, tower, genesisDamage * chainFalloff);
         if (tower.spec.id === 'teslaCoilLamp' && tower.ranks[1]! >= 2) this.applyStun(enemy, 0.8, false, tower);
         else if (tower.spec.id === 'teslaCoilLamp' && tower.ranks[1]! >= 1 && Math.random() < 0.1) this.applyStun(enemy, 0.5, false, tower);
         if (tower.spec.id === 'teslaCoilLamp' && tower.ranks[2]! >= 1) this.leaveTrackResidue(tower, enemy.pathProgress, enemy.route);
@@ -4725,7 +5101,10 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  private eliteCount(enemy: ActiveEnemy, id: EndlessEliteId): number { return enemy.elites.filter((elite) => elite === id).length; }
+  private eliteCount(enemy: ActiveEnemy, id: EndlessEliteId): number {
+    if ((enemy.passiveStacks.get('champion-elite-suppressed-until') ?? 0) > this.simTime) return 0;
+    return enemy.elites.filter((elite) => elite === id).length;
+  }
 
   private consumeHermesCrowdControl(enemy: ActiveEnemy): boolean {
     const charges = endlessHermesCrowdControlCharges(enemy.elites);
@@ -4823,7 +5202,14 @@ export class GameScene extends Phaser.Scene {
     const upgradedTower = target ?? this.selectedTower;
     const sodaDiscount = upgradedTower && this.towers.some((soda) => soda.spec.id === 'sodaMachineMech' && soda.ranks[1]! >= 4
       && Math.hypot(this.towerGridCenter(soda).x - this.towerGridCenter(upgradedTower).x, this.towerGridCenter(soda).y - this.towerGridCenter(upgradedTower).y) <= 4) ? 0.9 : 1;
-    return Math.ceil(base * multiplier * sodaDiscount * transmutationCost / 10) * 10;
+    const championDiscount = upgradedTower ? this.towers.reduce((discount, champion) => {
+      if (champion.spec.id !== 'necroAlchemistCore') return discount;
+      const rank = champion.ranks[2]!;
+      const radius = rank >= 10 ? 6 : 4;
+      if (rank < 2 || Math.hypot(this.towerGridCenter(champion).x - this.towerGridCenter(upgradedTower).x, this.towerGridCenter(champion).y - this.towerGridCenter(upgradedTower).y) > radius) return discount;
+      return Math.max(discount, rank >= 9 ? 0.4 : rank >= 6 ? 0.3 : rank >= 4 ? 0.2 : 0.1);
+    }, 0) : 0;
+    return Math.ceil(base * multiplier * sodaDiscount * (1 - championDiscount) * transmutationCost / 10) * 10;
   }
 
   private showModifierChoice(): void {
@@ -5031,6 +5417,8 @@ export class GameScene extends Phaser.Scene {
     if (tower) {
       if (!exactDamage) rawDamage *= this.globalDamageMultiplier() * tower.damageAuraMultiplier;
       const criticalChance = Math.min(1, this.mutationStack('keenAim') * 0.1);
+      const prometheusCritAura = this.towers.some((champion) => champion.spec.id === 'prometheus' && champion.ranks[2]! >= 8
+        && Math.hypot(this.towerGridCenter(champion).x - this.towerGridCenter(tower).x, this.towerGridCenter(champion).y - this.towerGridCenter(tower).y) <= 8);
       const clawCritAura = this.towers.some((claw) => claw.spec.id === 'arcadeClawMachine' && claw.ranks[1]! >= 4
         && this.distanceToPathTiles(this.towerGridCenter(claw), enemy.pathProgress, enemy.route) <= claw.spec.range * claw.rangeMultiplier);
       const trafficCritAura = this.towers.some((signal) => {
@@ -5058,16 +5446,18 @@ export class GameScene extends Phaser.Scene {
       if (!exactDamage && this.mutationStack('luckyShot') && !enemy.spec.boss && Math.random() < 0.01) rawDamage = enemy.hp + 1000;
       if (!exactDamage && this.mutationStack('criticalOverload')) rawDamage *= criticalHit ? Math.max(1.1, 3 - this.mutationStack('bluntedCriticals') * 0.1) : 0.5;
       else if (!exactDamage && criticalHit && (PHYSICAL_PROJECTILE_TOWER_IDS.has(tower.spec.id) || upgradeCrit > 0)) {
-        rawDamage *= Math.max(1.1, 1.5 - this.mutationStack('bluntedCriticals') * 0.1);
+        rawDamage *= Math.max(1.1, 1.5 + (prometheusCritAura ? 0.3 : 0) - this.mutationStack('bluntedCriticals') * 0.1);
       }
       if (!exactDamage && criticalHit && tower.acquiredUpgrades.some((upgrade) => /crit.*slow|crits.*slow/i.test(upgrade.description))) this.applySlow(enemy, 0.2, 1, tower);
     }
     const activeClawShred = this.simTime < enemy.clawArmorShredUntil ? enemy.clawArmorShred : 0;
     const dent = enemy.passiveStacks.get('crusher-dent') ?? 0;
-    const activeArmorShred = this.simTime < enemy.armorShredUntil ? enemy.armorShred : 0;
+      const activeArmorShred = this.simTime < enemy.armorShredUntil ? enemy.armorShred : 0;
     const totalArmor = enemy.spec.armor + this.ironArmorAura(enemy);
     const flatStrippedArmor = Math.max(-5, totalArmor - enemy.armorFlatShred);
     let effectiveArmor = ignoresArmorOnCritical ? 0 : flatStrippedArmor < 0 ? flatStrippedArmor : Math.max(0, flatStrippedArmor - dent * 5) * (1 - Math.max(activeArmorShred, activeClawShred));
+    if (tower && this.towers.some((aegis) => aegis.spec.id === 'aegisPrime' && aegis.ranks[1]! >= 7
+      && Math.hypot(this.towerGridCenter(aegis).x - this.towerGridCenter(tower).x, this.towerGridCenter(aegis).y - this.towerGridCenter(tower).y) <= 12)) effectiveArmor *= 0.75;
     if (tower?.spec.id === 'lawnAerator') {
       const penetration = tower.ranks[0]! >= 7 ? 0.8 : (tower.ranks[0]! >= 4 ? 0.4 : tower.ranks[0]! >= 1 ? 0.15 : 0);
       effectiveArmor *= 1 - penetration;
@@ -5090,6 +5480,10 @@ export class GameScene extends Phaser.Scene {
     const thermalSource = damageSource && ['sentientMicrowaveOven', 'hotSauceSprinkler'].includes(damageSource.spec.id);
     if (thermalSource && this.simTime < enemy.thermalDamageTakenUntil) damageTakenMultiplier *= enemy.thermalDamageTakenMultiplier;
     if (tower && enemy.wetUntil > this.simTime && (tower.spec.attackType === 'freeze' || tower.spec.id === 'unstableToasterLauncher')) damageTakenMultiplier *= 1.25;
+    if (tower && enemy.wetUntil > this.simTime && (tower.spec.id === 'teslaCoilLamp' || tower.spec.id === 'freezeRayIceCreamTruck')) {
+      const leviathan = this.towers.find((champion) => champion.spec.id === 'leviathanSubCore' && champion.ranks[0]! >= 2);
+      if (leviathan) damageTakenMultiplier *= 1 + (leviathan.ranks[0]! >= 8 ? 0.6 : leviathan.ranks[0]! >= 5 ? 0.4 : 0.2);
+    }
     if (tower && PHYSICAL_PROJECTILE_TOWER_IDS.has(tower.spec.id) && enemy.slowUntil > this.simTime
       && this.towers.some((soda) => soda.spec.id === 'sodaMachineMech' && soda.ranks[2]! >= 4
         && this.distanceToPathTiles(this.towerGridCenter(soda), enemy.pathProgress, enemy.route) <= soda.spec.range * soda.rangeMultiplier)) damageTakenMultiplier *= 1.15;
@@ -5103,6 +5497,16 @@ export class GameScene extends Phaser.Scene {
     const effectiveHyperarmor = enemy.spec.hyperarmor < 0 ? enemy.spec.hyperarmor : Math.max(0, enemy.spec.hyperarmor - flatHyperarmorReduction) * (1 - activeHyperarmorShred);
     let damage = exactDamage ? Math.max(1, Math.floor(afterArmor)) : Math.max(1, Math.floor(afterArmor * (1 - effectiveHyperarmor / 200) * damageTakenMultiplier));
     if (enemy.spec.ability === 'doomsdayClockworkGoliath' || enemy.spec.ability === 'abyssalJunkHydra') {
+      const hitCap = Math.max(1, Math.floor(enemy.maxHp * 0.01));
+      if (damage > hitCap && (enemy.passiveStacks.get('mega-adaptive-armor-fx') ?? 0) <= this.simTime) {
+        enemy.passiveStacks.set('mega-adaptive-armor-fx', this.simTime + 0.8);
+        this.showMegaPulse(enemy, enemy.spec.ability === 'doomsdayClockworkGoliath' ? 0xf2ca68 : 0x75e9f5, 2.5);
+        const armorText = this.addToBoard(this.add.text(enemy.sprite.x, enemy.sprite.y - enemy.sprite.radius - 8, 'ADAPTIVE ARMOR', {
+          fontFamily: 'Arial', fontSize: `${Math.max(8, BOARD.cell * 0.3)}px`, color: '#fff1a8', fontStyle: 'bold',
+          backgroundColor: '#17222ddd', padding: { x: 4, y: 2 },
+        }).setOrigin(0.5).setDepth(9));
+        this.tweens.add({ targets: armorText, y: armorText.y - 9, alpha: 0, duration: 650, onComplete: () => armorText.destroy() });
+      }
       damage = endlessMegaBossDamageLimit(enemy.hp, enemy.maxHp, enemy.megaPhase, damage);
       if (damage <= 0) return;
     }
@@ -5115,6 +5519,23 @@ export class GameScene extends Phaser.Scene {
     }
     const actualHpRemoved = Math.min(enemy.hp, damage);
     enemy.hp -= damage;
+    if (actualHpRemoved > 0) {
+      for (const hive of this.towers) {
+        if (hive.spec.id !== 'genesisWeaver' || hive.ranks[1]! < 10) continue;
+        const key = 'genesis-bio-siphon-fraction';
+        const accumulated = (hive.passiveUpgradeTimers.get(key) ?? 0) + actualHpRemoved * 0.02;
+        const heal = Math.floor(accumulated);
+        hive.passiveUpgradeTimers.set(key, accumulated - heal);
+        if (heal > 0) {
+          this.baseHealth = Math.min(150, this.baseHealth + heal);
+          this.run.baseHealth = this.baseHealth;
+          if ((hive.passiveUpgradeTimers.get('genesis-bio-siphon-fx') ?? 0) <= this.simTime) {
+            hive.passiveUpgradeTimers.set('genesis-bio-siphon-fx', this.simTime + 0.5);
+            this.drawScreenWave(hive);
+          }
+        }
+      }
+    }
     this.triggerClockworkReverseGears(enemy);
     if (tower && this.eliteCount(enemy, 'siphon') > 0) {
       if (tower.siphonSlowUntil <= this.simTime) tower.siphonSlowAmount = 0;
@@ -5161,6 +5582,68 @@ export class GameScene extends Phaser.Scene {
       let bounty = Math.floor(baseBounty * Math.max(0, 1 + Math.min(1.5, this.mutationStack('bountySurge') * 0.2) - Math.min(0.8, this.mutationStack('leanBounties') * 0.2)));
       if (!enemy.eliteEcho) bounty *= endlessEliteStats(enemy.spec, enemy.elites).bountyMultiplier;
       const rewardTower = tower ?? damageCreditSource;
+      const goldCoatPayout = enemy.passiveStacks.get('necro-gold-coat-until') ?? 0;
+      const goldCoated = goldCoatPayout > 0;
+      if (goldCoated) bounty *= goldCoatPayout;
+      for (const champion of this.towers) {
+        if (champion.spec.id === 'prometheus' && champion.ranks[2]! > 0) {
+          const rank = champion.ranks[2]!;
+          const range = rank >= 10 ? 6 : champion.spec.range * champion.rangeMultiplier;
+          const inAura = this.distanceToPathTiles(this.towerGridCenter(champion), enemy.pathProgress, enemy.route) <= range;
+          const bonus = rank >= 10 ? 3 : rank >= 9 ? 1.5 : rank >= 7 ? 0.75 : rank >= 5 ? 0.4 : rank >= 3 ? 0.2 : 0.1;
+          const globalRecovery = rank >= 9 && rank < 10 || rank === 7;
+          if (inAura || globalRecovery) bounty += Math.floor(baseBounty * bonus);
+        }
+        if (champion.spec.id === 'necroAlchemistCore' && champion.ranks[0]! >= 5 && goldCoated
+          && (enemy.elites.length > 0 || enemy.spec.miniboss)) bounty += Math.floor(baseBounty * 1.5);
+        if (champion.spec.id === 'leviathanSubCore' && champion.ranks[2]! >= 4 && enemy.elites.length > 0) bounty += champion.ranks[2]! >= 6 ? 500 : 200;
+        if (champion.spec.id === 'leviathanSubCore' && champion.ranks[2]! >= 8 && (enemy.spec.boss || enemy.spec.miniboss)) bounty += 1200;
+        if (champion.spec.id === 'genesisWeaver' && champion.ranks[1]! > 0
+          && this.distanceToPathTiles(this.towerGridCenter(champion), enemy.pathProgress, enemy.route) <= champion.spec.range * champion.rangeMultiplier) {
+          const threshold = champion.ranks[1]! >= 7 ? 10 : champion.ranks[1]! >= 4 ? 20 : champion.ranks[1]! >= 2 ? 35 : 50;
+          const key = 'genesis-bio-harvest-kills';
+          let count = (champion.passiveUpgradeTimers.get(key) ?? 0) + 1;
+          if (count >= threshold) {
+            count -= threshold;
+            this.baseHealth = Math.min(champion.ranks[1]! >= 8 ? 150 : 100, this.baseHealth + 1);
+            this.run.baseHealth = this.baseHealth;
+            const healFx = this.addToBoard(this.add.circle(BOARD.x + BOARD.cell * 2, BOARD.y + BOARD.cell * 2, 4, 0x57f3a1, 0.65).setDepth(7));
+            this.tweens.add({ targets: healFx, radius: 13, alpha: 0, duration: 420, onComplete: () => healFx.destroy() });
+          }
+          champion.passiveUpgradeTimers.set(key, count);
+        }
+      }
+      const genesisSource = this.towers.find((candidate) => candidate.spec.id === 'genesisWeaver' && candidate.ranks[2]! >= 2);
+      if (genesisSource && (enemy.passiveStacks.get('genesis-spore-infected') ?? 0) > this.simTime) {
+        const source = genesisSource;
+        const rank = source.ranks[2]!;
+        enemy.passiveStacks.delete('genesis-spore-infected');
+        const radius = rank >= 3 ? 2.5 : 1.5;
+        const burstDamage = rank >= 9 ? 3500 : rank >= 6 ? 1200 : 200;
+        const burst = this.addToBoard(this.add.circle(enemy.sprite.x, enemy.sprite.y, 3, 0x79ff78, 0.4).setStrokeStyle(2, 0xc8ffc7, 0.9).setDepth(8));
+        this.tweens.add({ targets: burst, radius: radius * BOARD.cell, alpha: 0, duration: 330, onComplete: () => burst.destroy() });
+        for (const nearby of this.enemies) {
+          if (!nearby.alive || nearby === enemy || Phaser.Math.Distance.Between(nearby.sprite.x, nearby.sprite.y, enemy.sprite.x, enemy.sprite.y) > radius * BOARD.cell) continue;
+          if (rank >= 4) {
+            nearby.burnSource = source;
+            nearby.burnDps = Math.max(nearby.burnDps, rank >= 9 ? 650 : rank >= 7 ? 650 : rank >= 5 ? 250 : 90);
+            nearby.burnUntil = Math.max(nearby.burnUntil, this.simTime + 4);
+            nearby.passiveStacks.set('genesis-spore-infected', this.simTime + 4);
+          }
+          this.damageEnemy(nearby, source, burstDamage, false, true);
+        }
+        if (rank >= 8) this.leaveTrackResidue(source, enemy.pathProgress, enemy.route);
+      }
+      const alchemyCloud = this.towers.find((candidate) => candidate.spec.id === 'necroAlchemistCore' && candidate.ranks[1]! >= 8
+        && (enemy.passiveStacks.get('necro-gas-until') ?? 0) > this.simTime);
+      if (alchemyCloud) {
+        const blast = this.addToBoard(this.add.circle(enemy.sprite.x, enemy.sprite.y, 3, 0x50f18a, 0.28).setStrokeStyle(2, 0xa5ffc0, 0.9).setDepth(8));
+        this.tweens.add({ targets: blast, radius: 2.5 * BOARD.cell, alpha: 0, duration: 360, onComplete: () => blast.destroy() });
+        for (const nearby of this.enemies) if (nearby.alive && nearby !== enemy
+          && Phaser.Math.Distance.Between(nearby.sprite.x, nearby.sprite.y, enemy.sprite.x, enemy.sprite.y) <= 2.5 * BOARD.cell) {
+          this.damageEnemy(nearby, alchemyCloud, 2500, false, true);
+        }
+      }
       if (rewardTower?.spec.id === 'sodaMachineMech' && rewardTower.ranks[1]! >= 5) bounty *= 2;
       if (rewardTower?.spec.id === 'arcadeClawMachine' && rewardTower.ranks[1]! >= 5) bounty *= 3;
       const goldRush = this.towers.some((candidate) => candidate.spec.id === 'sodaMachineMech' && candidate.ranks[1]! >= 7
@@ -5206,6 +5689,52 @@ export class GameScene extends Phaser.Scene {
 
   /** Shared on-hit hooks ensure descriptive upgrade effects have a live combat trigger. */
   private applyUpgradeHitEffects(tower: PlacedTower, enemy: ActiveEnemy, rawDamage: number, primaryTarget = false): number {
+    if (tower.spec.id === 'necroAlchemistCore' && tower.ranks[0]! > 0 && !enemy.spec.boss) {
+      const rank = tower.ranks[0]!;
+      const chance = rank >= 10 ? 0.15 : rank >= 9 ? 0.12 : rank >= 8 ? 0.08 : rank >= 6 ? 0.08 : rank >= 4 ? 0.03 : rank >= 3 ? 0.06 : rank >= 2 ? 0.04 : 0.02;
+      if (!enemy.passiveStacks.has('necro-gold-coat-until') && Math.random() < chance) {
+        const payoutMultiplier = rank >= 10 ? 6 : rank >= 8 ? 5 : rank >= 7 ? 3.5 : rank >= 4 ? 3 : rank >= 3 ? 2 : rank >= 2 ? 1.5 : 1;
+        enemy.passiveStacks.set('necro-gold-coat-until', payoutMultiplier);
+        const gold = this.addToBoard(this.add.circle(enemy.sprite.x, enemy.sprite.y, enemy.sprite.radius + 2, 0xffd15e, 0.24).setStrokeStyle(1.5, 0xffef98, 0.9).setDepth(7));
+        this.tweens.add({ targets: gold, scale: 1.35, alpha: 0.35, yoyo: true, repeat: 2, duration: 210, onComplete: () => gold.destroy() });
+        if (rank >= 10) rawDamage = enemy.hp + 1;
+      }
+      if (rank >= 6 && enemy.passiveStacks.has('necro-gold-coat-until')) {
+        enemy.damageTakenMultiplier = Math.max(enemy.damageTakenMultiplier, 1.2);
+        enemy.damageTakenUntil = Math.max(enemy.damageTakenUntil, this.simTime + 3600);
+      }
+    }
+    if (tower.spec.id === 'genesisWeaver') {
+      const [swarm, , spores] = tower.ranks;
+      if (swarm >= 2) enemy.armorFlatShred = Math.max(enemy.armorFlatShred, swarm >= 5 ? 5 : 1);
+      if (swarm >= 3) {
+        enemy.hyperarmorShred = Math.max(enemy.hyperarmorShred, swarm >= 10 ? 1 : swarm >= 7 ? 0.3 : 0.05);
+        enemy.hyperarmorShredUntil = Math.max(enemy.hyperarmorShredUntil, this.simTime + (swarm >= 9 ? 3 : 1));
+      }
+      if (swarm >= 9 && !enemy.spec.boss) {
+        const key = 'genesis-hyperarmor-contact-seconds';
+        const lastKey = 'genesis-hyperarmor-contact-last';
+        const last = enemy.passiveStacks.get(lastKey) ?? this.simTime;
+        const exposure = this.simTime - last <= 0.2 ? (enemy.passiveStacks.get(key) ?? 0) + Math.max(0, this.simTime - last) : 0;
+        enemy.passiveStacks.set(key, exposure);
+        enemy.passiveStacks.set(lastKey, this.simTime);
+        if (exposure >= 3) { enemy.hyperarmorShred = 1; enemy.hyperarmorShredUntil = this.simTime + 3600; }
+      }
+      if (swarm >= 4 && enemy.megaShieldHp > 0) rawDamage *= 2;
+      if (swarm >= 7 && (enemy.spec.boss || enemy.spec.miniboss) && enemy.megaShieldHp > 0) enemy.megaShieldHp = Math.max(0, enemy.megaShieldHp - 500 / Math.max(1, tower.spec.attackRate));
+      if (swarm >= 10) enemy.hyperarmorShredUntil = this.simTime + 3600;
+      if (spores > 0) {
+        const dps = spores >= 9 ? 650 : spores >= 7 ? 650 : spores >= 5 ? 250 : spores >= 3 ? 90 : 30;
+        enemy.burnSource = tower;
+        enemy.burnDps = Math.max(enemy.burnDps, dps * tower.damageMultiplier);
+        enemy.burnUntil = Math.max(enemy.burnUntil, this.simTime + 4);
+        enemy.passiveStacks.set('genesis-spore-infected', this.simTime + 4);
+        if (spores >= 5) enemy.armorFlatShred = Math.max(enemy.armorFlatShred, 10);
+        const executeAt = spores >= 9 ? 0.15 : spores >= 7 ? 0.12 : spores >= 6 ? 0.08 : 0;
+        if (executeAt > 0 && !enemy.spec.boss && enemy.hp <= enemy.maxHp * executeAt) rawDamage = Math.max(rawDamage, enemy.hp + 1);
+      }
+      this.drawChampionStatus(enemy, 0x57f3a1);
+    }
     for (const upgrade of tower.acquiredUpgrades) {
       const text = upgrade.description.toLowerCase();
       if (tower.spec.id === 'lawnDartGnome' && text.includes('stun')) continue;
@@ -5386,8 +5915,13 @@ export class GameScene extends Phaser.Scene {
   private drawShot(tower: PlacedTower, target: ActiveEnemy): void {
     const origin = this.towerCenter(tower.tile, tower.spec);
     const shot = this.addToBoard(this.add.graphics().setDepth(3));
-    shot.lineStyle(1, tower.spec.color, 0.88).lineBetween(origin.x, origin.y, target.sprite.x, target.sprite.y);
-    this.tweens.add({ targets: shot, alpha: 0, duration: this.projectileSlowedByTape(tower, target) ? 136 : 95, onComplete: () => shot.destroy() });
+    const champion = tower.spec.rarity === 'Champion';
+    shot.lineStyle(champion ? 4 : 1, tower.spec.color, champion ? 0.38 : 0.88).lineBetween(origin.x, origin.y, target.sprite.x, target.sprite.y);
+    if (champion) {
+      shot.lineStyle(1.5, 0xfff2c2, 0.95).lineBetween(origin.x, origin.y, target.sprite.x, target.sprite.y);
+      shot.fillStyle(tower.spec.color, 0.95).fillCircle(target.sprite.x, target.sprite.y, 4);
+    }
+    this.tweens.add({ targets: shot, alpha: 0, duration: this.projectileSlowedByTape(tower, target) ? 190 : champion ? 170 : 95, onComplete: () => shot.destroy() });
   }
 
   private drawRadialBurst(tower: PlacedTower): void {
@@ -5495,6 +6029,22 @@ export class GameScene extends Phaser.Scene {
       * (1 + Math.min(1.5, this.mutationStack('bountySurge') * 0.2))
       * (this.mutationStack('resourceScarcity') ? 0.4 : 1)));
     this.coins += payout;
+    for (const leviathan of this.towers) {
+      if (leviathan.spec.id !== 'leviathanSubCore' || leviathan.ranks[2]! < 1) continue;
+      const rank = leviathan.ranks[2]!;
+      const rate = rank >= 10 ? 0.15 : rank >= 9 ? 0.12 : rank >= 5 ? 0.10 : rank >= 3 ? 0.08 : rank >= 2 ? 0.05 : 0.03;
+      const cap = rank >= 10 ? 5000 : rank >= 9 ? 4000 : rank >= 7 ? 2800 : rank >= 5 ? 1800 : rank >= 3 ? 1000 : rank >= 2 ? 600 : 300;
+      this.coins += Math.min(cap, Math.floor(this.coins * rate));
+    }
+    for (const alchemist of this.towers) if (alchemist.spec.id === 'necroAlchemistCore' && alchemist.ranks[2]! >= 8) {
+      const capacity = alchemist.ranks[2]! >= 10 ? 1500 : alchemist.ranks[2]! >= 7 ? 1000 : alchemist.ranks[2]! >= 5 ? 500 : 250;
+      const center = this.towerCenter(alchemist.tile, alchemist.spec);
+      for (const ally of this.towers) {
+        if (ally === alchemist) continue;
+        const other = this.towerCenter(ally.tile, ally.spec);
+        if (Phaser.Math.Distance.Between(center.x, center.y, other.x, other.y) <= 6 * BOARD.cell) ally.shieldHp = capacity;
+      }
+    }
     this.run.coins = this.coins;
     this.lastWavePayout = payout;
     if (this.mutationStack('emergencyBreakdown') && this.wave % 5 === 0) {

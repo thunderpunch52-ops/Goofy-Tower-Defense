@@ -106,7 +106,7 @@ const CAMPAIGN_TOWER_UNLOCKS: Record<string, { stage: number; star: number }> = 
 const LEVEL_TOWER_UNLOCKS: Record<string, number> = { anvilTrapdoor: 2, discoTurret: 5, catLaserPointer: 10, cosmicRoomba: 15 };
 const GEM_TOWER_UNLOCKS: Record<string, number> = {
   cardboardFortress: 20, bubbleBlower: 10, lawnAerator: 12, staplerTurret: 25, teslaCoilLamp: 60,
-  aegisPrime: 500, prometheus: 600, genesisWeaver: 550, leviathanSubCore: 650, necroAlchemistCore: 750,
+  aegisPrime: 650, prometheus: 750, genesisWeaver: 700, leviathanSubCore: 850, necroAlchemistCore: 950,
 };
 
 export function towerPathRankCap(towerId: string, pathIndex: number): number {

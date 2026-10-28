@@ -66,12 +66,15 @@ export function endlessMegaBossPhase(hpRatio: number): 1 | 2 | 3 {
   return hpRatio <= 0.33 ? 3 : hpRatio <= 0.66 ? 2 : 1;
 }
 
-/** Keeps one attack from skipping an entire mega-boss phase transition. */
+/** Limits burst/exponential attacks and prevents one hit skipping a phase. */
 export function endlessMegaBossDamageLimit(hp: number, maxHp: number, phase: 1 | 2 | 3, damage: number): number {
+  if (maxHp <= 0) return damage;
+  const adaptiveArmorCap = Math.max(1, Math.floor(maxHp * 0.01));
+  const cappedDamage = Math.min(damage, adaptiveArmorCap);
   const threshold = phase === 1 ? 0.66 : phase === 2 ? 0.33 : 0;
-  if (threshold === 0 || maxHp <= 0) return damage;
+  if (threshold === 0) return cappedDamage;
   const boundaryHp = Math.floor(maxHp * threshold);
-  return Math.min(damage, Math.max(0, hp - boundaryHp));
+  return Math.min(cappedDamage, Math.max(0, hp - boundaryHp));
 }
 
 export function endlessMegaBossShield(maxHp: number): number { return Math.floor(Math.max(0, maxHp) * 0.1); }
