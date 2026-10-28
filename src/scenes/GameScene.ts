@@ -161,6 +161,8 @@ export class GameScene extends Phaser.Scene {
   private visualRoutes: Tile[][] = [];
   private roadTiles = new Set<string>();
   private obstacleTiles = new Set<string>();
+  private cooledTiles = new Set<string>();
+  private cooledTerrainGraphics?: Phaser.GameObjects.Graphics;
   private mapObstacles: MapObstacle[] = [];
   private mapObstacleGraphics?: Phaser.GameObjects.Graphics;
   private waveSpawnIndex = 0;
@@ -378,6 +380,8 @@ export class GameScene extends Phaser.Scene {
     this.mysteryTowerRefund = false;
     this.mysteryTowerOffer = undefined;
     this.towerObjects.clear();
+    this.cooledTiles.clear();
+    this.cooledTerrainGraphics = undefined;
     this.wave = 0;
     this.waveSpawnIndex = 0;
     this.star = normalizeStar(Number(this.registry.get('selectedStar') ?? 1));
@@ -480,11 +484,18 @@ export class GameScene extends Phaser.Scene {
   }
 
   private get currentTowerSpec(): TowerSpec { return TOWERS[this.rosterIndex]!; }
-  private get placementCost(): number {
-    if (this.mysteryPlacing) return 0;
-    const spec = this.currentTowerSpec;
+  private basePlacementCost(spec: TowerSpec): number {
     const copies = this.mutationStack('inflationaryMarket') ? this.towers.filter((tower) => tower.spec.id === spec.id).length : 0;
     return Math.ceil(spec.cost * (1 + copies * 0.2) * (this.mutationStack('glassCannonEconomy') ? 1.35 : 1) / 10) * 10;
+  }
+  private placementCostAt(tile: Tile, spec: TowerSpec = this.currentTowerSpec): number {
+    const base = this.mysteryPlacing ? 0 : this.basePlacementCost(spec);
+    if (this.mapId !== 'core-meltdown-vent') return base;
+    let hotTiles = 0;
+    for (let dx = 0; dx < spec.footprint; dx += 1) for (let dy = 0; dy < spec.footprint; dy += 1) {
+      if (!this.cooledTiles.has(routeKey({ x: tile.x + dx, y: tile.y + dy }))) hotTiles += 1;
+    }
+    return base + hotTiles * 50;
   }
 
   private panBoardWithKeys(deltaSeconds: number): void {
@@ -726,8 +737,9 @@ export class GameScene extends Phaser.Scene {
   private startPlacingTower(): void {
     if (this.phase === 'victory' || this.phase === 'defeat') return;
     const spec = this.currentTowerSpec;
-    if (this.coins < this.placementCost) {
-      this.gridFeedback = `NOT ENOUGH COINS · $${this.placementCost} NEEDED`;
+    const baseCost = this.mysteryPlacing ? 0 : this.basePlacementCost(spec);
+    if (this.coins < baseCost) {
+      this.gridFeedback = `NOT ENOUGH COINS · $${baseCost} NEEDED`;
       this.updateHUD();
       return;
     }
@@ -756,12 +768,12 @@ export class GameScene extends Phaser.Scene {
     this.updateHUD();
   }
 
-  private deleteSelectedTower(): void {
+  private deleteSelectedTower(fullRefund = false): void {
     const tower = this.selectedTower;
     if (!tower) return;
-    if (tower.noSell || this.mutationStack('overchargedSells') > 0) { this.gridFeedback = 'THIS TOWER CANNOT BE SOLD'; this.updateHUD(); return; }
-    const refund = Math.ceil(tower.spentCoins * 0.5);
-    if (this.mutationStack('overchargeCascade')) {
+    if (!fullRefund && (tower.noSell || this.mutationStack('overchargedSells') > 0)) { this.gridFeedback = 'THIS TOWER CANNOT BE SOLD'; this.updateHUD(); return; }
+    const refund = fullRefund ? tower.spentCoins : Math.ceil(tower.spentCoins * 0.5);
+    if (!fullRefund && this.mutationStack('overchargeCascade')) {
       const center = this.towerCenter(tower.tile, tower.spec);
       const blast = this.addToBoard(this.add.circle(center.x, center.y, 2, 0x69e8ff, 0.4).setStrokeStyle(2, 0x9df4ff, 1).setDepth(8));
       this.tweens.add({ targets: blast, radius: 4 * BOARD.cell, alpha: 0, duration: 360, onComplete: () => blast.destroy() });
@@ -798,7 +810,7 @@ export class GameScene extends Phaser.Scene {
       puddle.sprite.destroy();
       this.guanoPuddles.splice(puddleIndex, 1);
     }
-    this.gridFeedback = `TOWER SOLD · +$${refund} REFUND`;
+    this.gridFeedback = fullRefund ? `TOWER UNINSTALLED · +$${refund} REFUNDED` : `TOWER SOLD · +$${refund} REFUND`;
     this.updateHUD();
   }
 
@@ -818,6 +830,14 @@ export class GameScene extends Phaser.Scene {
       : this.odysseyMode && this.odysseyState ? `ODYSSEY  ·  NODE ${this.odysseyState.nodeIndex + 1}/${this.odysseyState.length}` : this.draftMode === 'campaign' ? 'DRAFT CAMPAIGN' : this.draftMode === 'endless' ? `DRAFT ENDLESS  /  ${this.star} STAR` : this.mapPreview ? 'MAP PREVIEW   ·   STAGE 1 WAVES' : this.endlessMode ? `ENDLESS   /   ${this.star} STAR` : `STAGE ${this.campaignStage}   /   ${this.star} STAR`;
     this.add.text(68, 54, modeHeading, { fontFamily: 'Arial', fontSize: '13px', color: COLORS.muted, fontStyle: 'bold', letterSpacing: 2 });
     this.add.text(68, 77, getMap(this.mapId).name, { fontFamily: 'Arial', fontSize: '21px', color: COLORS.cream, fontStyle: 'bold', wordWrap: { width: 300 } });
+    const mapRule: Partial<Record<MapId, string>> = {
+      'world-engine-bastion': 'EVERY 5 WAVES · SECTOR SHIFT · FULL TOWER REFUNDS',
+      'core-meltdown-vent': 'HOT GROUND · COOLING COSTS $50 PER NEW TILE',
+      'bio-vascular-spire': 'ENEMIES REGENERATE 5% HP/SEC WITHOUT ACTIVE DOT',
+      'abyssal-trench': 'WATER BLOCKED · −20% SPEED BY ROAD · CRUSHERS COVER 4 TILES',
+      'alchemists-crucible': 'UPGRADES COST +50% AFTER EACH 5 CLEARED WAVES',
+    };
+    if (mapRule[this.mapId]) this.add.text(68, 103, mapRule[this.mapId]!, { fontFamily: 'Arial', fontSize: '9px', color: '#f4c86a', fontStyle: 'bold', wordWrap: { width: 300 }, maxLines: 1 });
     this.add.text(1068, 58, 'GOOFY TOWER SHOP', { fontFamily: 'Trebuchet MS', fontSize: '13px', color: COLORS.muted, fontStyle: 'bold', letterSpacing: 1 });
   }
 
@@ -881,6 +901,8 @@ export class GameScene extends Phaser.Scene {
       graphics.fillRect(BOARD.x + x! * BOARD.cell, BOARD.y + y! * BOARD.cell, BOARD.cell, BOARD.cell);
     }
     this.drawThemedRoads(graphics);
+    this.cooledTerrainGraphics = this.addToBoard(this.add.graphics().setDepth(0.5));
+    this.drawCooledTiles();
     this.mapObstacleGraphics = this.addToBoard(this.add.graphics().setDepth(1));
     this.drawMapObstacles(this.mapObstacleGraphics);
     this.createRouteArrows();
@@ -901,9 +923,10 @@ export class GameScene extends Phaser.Scene {
       const tile = { x, y };
       if (x < 0 || x >= BOARD_COLUMNS || y < 0 || y >= BOARD_ROWS) return;
       if (this.placing) {
-        this.gridFeedback = this.isBuildable(tile) && this.coins >= this.placementCost
-          ? `OPEN TILE (${x}, ${y}) · CLICK TO PLACE`
-          : this.coins < this.placementCost ? `NEED $${this.placementCost}` : `BLOCKED TILE (${x}, ${y})`;
+        const cost = this.placementCostAt(tile);
+        this.gridFeedback = this.isBuildable(tile) && this.coins >= cost
+          ? this.mapId === 'core-meltdown-vent' ? `COOLING + TOWER · $${cost} (${Math.ceil((cost - this.basePlacementCost(this.currentTowerSpec)) / 50)} tiles)` : `OPEN TILE (${x}, ${y}) · CLICK TO PLACE`
+          : this.coins < cost ? `NEED $${cost} INCLUDING COOLING` : `BLOCKED TILE (${x}, ${y})`;
         this.drawPlacementPreview(tile);
       } else {
         const tower = this.towerObjects.get(routeKey(tile));
@@ -1002,6 +1025,19 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  private drawCooledTiles(): void {
+    const graphics = this.cooledTerrainGraphics;
+    if (!graphics) return;
+    graphics.clear();
+    for (const key of this.cooledTiles) {
+      const [x, y] = key.split(',').map(Number);
+      const px = BOARD.x + x! * BOARD.cell; const py = BOARD.y + y! * BOARD.cell;
+      graphics.fillStyle(0x63dcff, 0.2).fillRect(px + 0.5, py + 0.5, BOARD.cell - 1, BOARD.cell - 1);
+      graphics.lineStyle(0.55, 0x9df4ff, 0.62).strokeRect(px + 1, py + 1, BOARD.cell - 2, BOARD.cell - 2);
+      graphics.lineStyle(0.45, 0xe5fcff, 0.34).lineBetween(px + 1, py + BOARD.cell - 1, px + BOARD.cell - 1, py + 1);
+    }
+  }
+
   private drawMapObstacles(graphics: Phaser.GameObjects.Graphics): void {
     const palette: Record<MapObstacle['kind'], { body: number; trim: number; accent: number }> = {
       toy: { body: 0x67517a, trim: 0xf7b0c7, accent: 0x63dcff },
@@ -1086,6 +1122,33 @@ export class GameScene extends Phaser.Scene {
     this.mapObstacleGraphics.clear();
     this.drawMapObstacles(this.mapObstacleGraphics);
     this.gridFeedback = 'DYNAMIC TERRAIN · OBSTACLES SHIFTED';
+  }
+
+  private shiftSpatialSector(): void {
+    const sectorWidth = 8; const sectorHeight = 10;
+    const sectorX = Math.floor(Math.random() * (BOARD_COLUMNS / sectorWidth)) * sectorWidth;
+    const sectorY = Math.floor(Math.random() * (BOARD_ROWS / sectorHeight)) * sectorHeight;
+    const previousSelection = this.selectedTower;
+    const affected = this.towers.filter((tower) => tower.tile.x < sectorX + sectorWidth
+      && tower.tile.x + tower.spec.footprint > sectorX
+      && tower.tile.y < sectorY + sectorHeight
+      && tower.tile.y + tower.spec.footprint > sectorY);
+    let refund = 0;
+    for (const tower of affected) {
+      refund += tower.spentCoins;
+      this.selectedTower = tower;
+      this.deleteSelectedTower(true);
+    }
+    if (previousSelection && this.towers.includes(previousSelection)) this.selectedTower = previousSelection;
+    const flash = this.addToBoard(this.add.rectangle(
+      BOARD.x + (sectorX + sectorWidth / 2) * BOARD.cell,
+      BOARD.y + (sectorY + sectorHeight / 2) * BOARD.cell,
+      sectorWidth * BOARD.cell, sectorHeight * BOARD.cell, 0x8ceaff, 0.18,
+    ).setStrokeStyle(2, 0xaef3ff, 0.95).setDepth(9));
+    this.tweens.add({ targets: flash, alpha: 0, scaleX: 1.08, scaleY: 1.08, duration: 900, onComplete: () => flash.destroy() });
+    const uninstalledCount = affected.length;
+    this.gridFeedback = `SPATIAL INSTABILITY · SECTOR SHIFTED · ${uninstalledCount} TOWER${uninstalledCount === 1 ? '' : 'S'} UNINSTALLED · +$${refund} REFUNDED`;
+    this.updateHUD();
   }
 
   private drawMapSurface(graphics: Phaser.GameObjects.Graphics): void {
@@ -1369,7 +1432,7 @@ export class GameScene extends Phaser.Scene {
     if (!this.hudGraphics) return;
     this.hudGraphics.clear();
     const spec = this.currentTowerSpec;
-    const valid = this.isBuildable(tile, spec) && this.coins >= this.placementCost;
+    const valid = this.isBuildable(tile, spec) && this.coins >= this.placementCostAt(tile, spec);
     this.hudGraphics.fillStyle(valid ? COLORS.mint : 0xef7e70, 0.72);
     this.hudGraphics.fillRect(BOARD.x + tile.x * BOARD.cell, BOARD.y + tile.y * BOARD.cell, BOARD.cell * spec.footprint, BOARD.cell * spec.footprint);
     const center = this.towerCenter(tile, spec);
@@ -1793,6 +1856,7 @@ export class GameScene extends Phaser.Scene {
     this.megaHazards.splice(0).forEach((hazard) => hazard.graphic.destroy());
     this.wave = number;
     if (number % 5 === 0) this.shiftDynamicTerrain();
+    if (number % 5 === 0 && this.mapId === 'world-engine-bastion') this.shiftSpatialSector();
     if (this.mutationStack('bountyHuntersMark')) this.markedEnemyWave = 0;
     this.waveSpawnIndex = 0;
     this.run.wave = number;
@@ -2071,6 +2135,16 @@ export class GameScene extends Phaser.Scene {
       } else if (this.simTime >= enemy.guanoPoisonUntil) {
         enemy.guanoPoisonStacks = 0;
         enemy.guanoPoisonTick = 0;
+      }
+      if (enemy.alive && this.mapId === 'bio-vascular-spire') {
+        const takingContinuousDamage = (this.simTime <= enemy.burnUntil && enemy.burnDps > 0)
+          || (this.simTime < enemy.guanoPoisonUntil && enemy.guanoPoisonStacks > 0)
+          || this.trackResidues.some((residue) => residue.damagePerSecond > 0 && this.simTime < residue.expiresAt
+            && residue.route === enemy.route && Math.abs(enemy.pathProgress - residue.progress) <= 0.62);
+        if (!takingContinuousDamage && enemy.hp < enemy.maxHp) {
+          enemy.hp = Math.min(enemy.maxHp, enemy.hp + enemy.maxHp * 0.05 * dt);
+          this.positionEnemy(enemy);
+        }
       }
       if (enemy.unfreezeSlowPending && this.simTime >= Math.max(enemy.freezeUntil, enemy.stunUntil)) {
         enemy.unfreezeSlowPending = false;
@@ -3331,6 +3405,10 @@ export class GameScene extends Phaser.Scene {
     for (const tower of this.towers) this.applyTowerAuras(tower);
     for (const tower of this.towers) if (tower.siphonSlowUntil > this.simTime) {
       tower.attackSpeedMultiplier *= Math.max(0.2, 1 - tower.siphonSlowAmount);
+    }
+    if (this.mapId === 'abyssal-trench') for (const tower of this.towers) {
+      if (tower.spec.id === 'hydraulicCarCrusher' || this.isHydroProtected(tower)) continue;
+      if (this.towerFootprintTouchesRoad(tower, 1)) tower.attackSpeedMultiplier *= 0.8;
     }
     this.stepPigeonHelpers(dt);
     for (const tower of this.towers) {
@@ -4687,12 +4765,15 @@ export class GameScene extends Phaser.Scene {
   private statusDurationMultiplier(): number { return 1 + Math.min(1.5, this.mutationStack('lingeringEffects') * 0.15); }
   private enemySpawnRateMultiplier(): number { return 1 + Math.min(1, this.mutationStack('crowdedWaves') * 0.1); }
   private upgradePrice(base: number, target?: PlacedTower): number {
+    const progressionWave = this.endlessOdysseyMode ? this.endlessProgressWave() : this.wave;
+    const transmutationCost = this.mapId === 'alchemists-crucible'
+      ? 1 + Math.floor(Math.max(0, progressionWave - 1) / 5) * 0.5 : 1;
     const multiplier = Math.max(0.1, 1 + Math.min(1, this.mutationStack('priceHike') * 0.1)
       - Math.min(0.5, this.mutationStack('discountPath') * 0.1)) * (this.mutationStack('glassCannonEconomy') ? 1.35 : 1);
     const upgradedTower = target ?? this.selectedTower;
     const sodaDiscount = upgradedTower && this.towers.some((soda) => soda.spec.id === 'sodaMachineMech' && soda.ranks[1]! >= 4
       && Math.hypot(this.towerGridCenter(soda).x - this.towerGridCenter(upgradedTower).x, this.towerGridCenter(soda).y - this.towerGridCenter(upgradedTower).y) <= 4) ? 0.9 : 1;
-    return Math.ceil(base * multiplier * sodaDiscount / 10) * 10;
+    return Math.ceil(base * multiplier * sodaDiscount * transmutationCost / 10) * 10;
   }
 
   private showModifierChoice(): void {
@@ -5905,11 +5986,17 @@ export class GameScene extends Phaser.Scene {
   private placeTower(tile: Tile): void {
     const spec = this.currentTowerSpec;
     const mystery = this.mysteryPlacing;
-    const cost = mystery ? 0 : spec.cost;
-    const totalSpent = mystery ? this.mysteryTowerCost : cost;
+    const cost = this.placementCostAt(tile, spec);
+    const totalSpent = mystery ? this.mysteryTowerCost + cost : cost;
     if (this.coins < cost) { this.gridFeedback = `NOT ENOUGH COINS · $${cost} NEEDED`; this.updateHUD(); return; }
     if (!this.isBuildable(tile, spec)) { this.gridFeedback = `INVALID ${spec.footprint}×${spec.footprint} FOOTPRINT · CHOOSE CLEAR TILES`; this.updateHUD(); return; }
     this.coins -= cost;
+    if (this.mapId === 'core-meltdown-vent' && !mystery) {
+      for (let dx = 0; dx < spec.footprint; dx += 1) for (let dy = 0; dy < spec.footprint; dy += 1) {
+        this.cooledTiles.add(routeKey({ x: tile.x + dx, y: tile.y + dy }));
+      }
+      this.drawCooledTiles();
+    }
     if (mystery) this.mysteryBoxUsed = true;
     this.mysteryPlacing = false;
     const center = this.towerCenter(tile, spec);
@@ -6025,12 +6112,35 @@ export class GameScene extends Phaser.Scene {
     return true;
   }
 
+  private tileTouchesRoad(tile: Tile, distance: number): boolean {
+    for (let dx = -distance; dx <= distance; dx += 1) for (let dy = -distance; dy <= distance; dy += 1) {
+      if (Math.abs(dx) + Math.abs(dy) > distance) continue;
+      if (this.roadTiles.has(routeKey({ x: tile.x + dx, y: tile.y + dy }))) return true;
+    }
+    return false;
+  }
+
+  private towerFootprintTouchesRoad(tower: PlacedTower, distance: number): boolean {
+    for (let dx = 0; dx < tower.spec.footprint; dx += 1) for (let dy = 0; dy < tower.spec.footprint; dy += 1) {
+      if (this.tileTouchesRoad({ x: tower.tile.x + dx, y: tower.tile.y + dy }, distance)) return true;
+    }
+    return false;
+  }
+
+  private isHydroProtected(tower: PlacedTower): boolean {
+    if (tower.spec.id === 'hydraulicCarCrusher') return true;
+    const center = this.towerGridCenter(tower);
+    return this.towers.some((engine) => engine !== tower && engine.spec.id === 'hydraulicCarCrusher'
+      && Math.hypot(this.towerGridCenter(engine).x - center.x, this.towerGridCenter(engine).y - center.y) <= 4);
+  }
+
   private isBuildable(tile: Tile, spec: TowerSpec = this.currentTowerSpec): boolean {
     for (let dx = 0; dx < spec.footprint; dx += 1) {
       for (let dy = 0; dy < spec.footprint; dy += 1) {
         const cell = { x: tile.x + dx, y: tile.y + dy };
         const key = routeKey(cell);
         if (cell.x < 0 || cell.x >= BOARD_COLUMNS || cell.y < 0 || cell.y >= BOARD_ROWS || this.roadTiles.has(key) || this.obstacleTiles.has(key) || this.towerObjects.has(key)) return false;
+        if (this.mapId === 'abyssal-trench' && !this.tileTouchesRoad(cell, 5)) return false;
       }
     }
     if (spec.id === 'lawnAerator') {
@@ -6511,7 +6621,7 @@ export class GameScene extends Phaser.Scene {
     if (!tower && this.mysteryPlacing) {
       this.towerStatsLabel?.setText('Mystery tower\nThe tower type is revealed when you place it.');
     } else if (!tower) {
-      this.towerStatsLabel?.setText(`${spec.role}\n${this.attackPatternLabel(spec)}\n${spec.damage} damage · ${spec.attackRate}/sec · ${spec.range} range · ${spec.footprint}×${spec.footprint}`);
+      this.towerStatsLabel?.setText(`${spec.role}\n${this.attackPatternLabel(spec)}\n${spec.damage} damage · ${spec.attackRate}/sec · ${spec.range} range · ${spec.footprint}×${spec.footprint}${this.mapId === 'core-meltdown-vent' ? '\nHOT GROUND · +$50 for each new footprint tile' : ''}`);
     } else {
       const value = (number: number) => Number(number.toFixed(1)).toString();
       const stat = (name: string, base: number, current: number, unit = '') => {
@@ -6526,6 +6636,11 @@ export class GameScene extends Phaser.Scene {
           ? 'Range ∞ · whole map'
           : stat('Range', spec.range, spec.range * tower.rangeMultiplier),
       ];
+      if (this.mapId === 'abyssal-trench' && this.towerFootprintTouchesRoad(tower, 1) && !this.isHydroProtected(tower)) {
+        details.push('HYDRO-PRESSURE · −20% attack speed near the trench');
+      } else if (this.mapId === 'abyssal-trench' && this.isHydroProtected(tower)) {
+        details.push('ENGINE SHIELD · protected from Hydro-Pressure');
+      }
       const modifiers: string[] = [];
       if (tower.blastMultiplier > 1) modifiers.push(`Blast ×${value(tower.blastMultiplier)}`);
       if (tower.slowBonus > 0) modifiers.push(`Slow +${Math.round(tower.slowBonus * 100)}%`);
@@ -6550,7 +6665,7 @@ export class GameScene extends Phaser.Scene {
     // Mystery run and throughout Stage 4.
     const mysteryBoxReplacesRoster = this.isMysteryOnlyRun();
     this.rosterNameLabel?.setText(mysteryBoxReplacesRoster ? 'MYSTERY BOX' : this.draftMode !== 'none' ? `DRAFT ROSTER · ${this.draftRoster.length}` : 'OPEN GRID');
-    const canAfford = (this.draftMode !== 'none' || currentUnlock.unlocked) && this.coins >= this.currentTowerSpec.cost;
+    const canAfford = (this.draftMode !== 'none' || currentUnlock.unlocked) && this.coins >= this.basePlacementCost(this.currentTowerSpec);
     this.towerButton?.setStrokeStyle(1, canAfford ? RARITY_COLOR[this.currentTowerSpec.rarity] : 0xef7e9c).setFillStyle(canAfford ? 0x202c46 : 0x302436);
     this.upgradeButtons.forEach((button, pathIndex) => {
       const tower = this.selectedTower;
